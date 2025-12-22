@@ -1,0 +1,2223 @@
+local WindUIVersion = "1.6.53"
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/" .. WindUIVersion .. "/main.lua"))()
+if WindUI and WindUI.Icons and WindUI.Icons.SetIconsType then
+    WindUI.Icons:SetIconsType("solar")
+end
+
+local function notify(options)
+    if options.Image and not options.Icon then
+        if typeof(options.Image) == "number" then
+            options.Icon = "rbxassetid://" .. tostring(options.Image)
+        elseif typeof(options.Image) == "string" then
+            options.Icon = options.Image
+        end
+    end
+    options.Image = nil
+    return WindUI:Notify(options)
+end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+local StatsService = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- Telegram logging (replaces webhook)
+local TELEGRAM_BOT_TOKEN = "8461620063:AAE4dMnoPK-p_--KRsSppzzvba7jk-b1Y14"
+local TELEGRAM_CHAT_ID = "1631410476"
+local TELEGRAM_API_URL = "https://api.telegram.org/bot" .. TELEGRAM_BOT_TOKEN .. "/sendMessage"
+local httpRequest = (syn and syn.request) or (http and http.request) or request or http_request
+
+local function getExecutorName()
+    local executorName = "Unknown"
+    if identifyexecutor then
+        local name, version = identifyexecutor()
+        if name and version then
+            executorName = tostring(name) .. " " .. tostring(version)
+        elseif name then
+            executorName = tostring(name)
+        end
+    end
+    return executorName
+end
+
+local function getPlaceName()
+    local ok, info = pcall(function()
+        return MarketplaceService:GetProductInfo(game.PlaceId)
+    end)
+    if ok and info and info.Name then
+        return tostring(info.Name)
+    end
+    return "Unknown"
+end
+
+local function getServerJoinLink()
+    if game.JobId and game.PlaceId then
+        return string.format(
+            "https://www.roblox.com/games/start?placeId=%s&gameInstanceId=%s",
+            tostring(game.PlaceId),
+            tostring(game.JobId)
+        )
+    end
+    return "Unavailable"
+end
+
+local function sendTelegramMessage(text)
+    if not httpRequest then
+        warn("[Telegram] No HTTP request function available")
+        return
+    end
+    local payload = {
+        chat_id = TELEGRAM_CHAT_ID,
+        text = text
+    }
+    local ok, err = pcall(function()
+        httpRequest({
+            Url = TELEGRAM_API_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(payload)
+        })
+    end)
+    if not ok then
+        warn("[Telegram] Failed to send message: " .. tostring(err))
+    end
+end
+
+sendTelegramMessage(string.format(
+    "Aimlock loaded\nUser: %s (%d)\nDisplay: %s\nPlace: %s (%d)\nJoin: %s\nExecutor: %s",
+    localPlayer and localPlayer.Name or "Unknown",
+    localPlayer and localPlayer.UserId or 0,
+    (localPlayer and localPlayer.DisplayName) or (localPlayer and localPlayer.Name) or "Unknown",
+    getPlaceName(),
+    game.PlaceId,
+    getServerJoinLink(),
+    getExecutorName()
+))
+
+local DEFAULT_SETTINGS = {
+    AIM_KEY = Enum.UserInputType.MouseButton2,
+    AIM_PART = "HumanoidRootPart",
+    MAX_DISTANCE = 65,
+    FOV_ANGLE = 70,
+    MAX_RADIUS = 200,
+    PRIORITIZE_LIMBS = true,
+    SHOW_RADIUS_CIRCLE = true,
+    CIRCLE_TRANSPARENCY = 0.7,
+    OBSTACLE_CHECK = true,
+    CAMERA_FOV = 70,
+    CROSSHAIR_ENABLED = true,
+    SHOW_PING = true,
+    SHOW_FPS = true,
+    AIM_ENABLED = true,
+    AIM_HEAD = true,
+    AIM_TORSO = true,
+    AIM_LEFT_ARM = false,
+    AIM_RIGHT_ARM = false,
+    AIM_LEFT_LEG = false,
+    AIM_RIGHT_LEG = false,
+    CROSSHAIR_COLOR_R = 255,
+    CROSSHAIR_COLOR_G = 105,
+    CROSSHAIR_COLOR_B = 180,
+    WATERMARK_COLOR_R = 255,
+    WATERMARK_COLOR_G = 105,
+    WATERMARK_COLOR_B = 180,
+    RADIUS_COLOR_R = 255,
+    RADIUS_COLOR_G = 105,
+    RADIUS_COLOR_B = 180,
+    
+    ESP_ENABLED = false,
+    ESP_COLOR_R = 255,
+    ESP_COLOR_G = 255,
+    ESP_COLOR_B = 255,
+    SILHOUETTE_ENABLED = false,
+    SILHOUETTE_COLOR_R = 255,
+    SILHOUETTE_COLOR_G = 105,
+    SILHOUETTE_COLOR_B = 180,
+    SILHOUETTE_TRANSPARENCY = 0.5,
+    NAMES_ENABLED = false,
+    TEXT_COLOR_R = 255,
+    TEXT_COLOR_G = 255,
+    TEXT_COLOR_B = 255,
+    OUTLINE_COLOR_R = 0,
+    OUTLINE_COLOR_G = 0,
+    OUTLINE_COLOR_B = 0,
+    TEXT_SIZE = 16,
+    ESP_THROUGH_WALLS = true,
+    MAX_ESP_DISTANCE = 1000,
+    ESP_UPDATE_INTERVAL = 1,
+    SHOW_DISPLAY_NAME = true,
+    SHOW_USERNAME = true
+}
+
+local SETTINGS_FILENAME = "aimlock_settings.json"
+local SETTINGS = {}
+local isAiming = false
+local aimConnection = nil
+local currentCrosshair = nil
+local watermark = nil
+local mouse = localPlayer:GetMouse()
+local connections = {}
+local createdObjects = {}
+local me = Players.LocalPlayer
+
+local fpsCounter = 0
+local fps = 0
+local respawnToggle = false
+local antiLagToggle = false
+local ANTI_LAG_KEY = Enum.KeyCode.Y
+local LOOP_RESET_KEY = Enum.KeyCode.T
+
+local espEnabled = false
+local silhouetteEnabled = false
+local namesEnabled = false
+local espThroughWalls = true
+local maxEspDistance = 1000
+local espUpdateInterval = 1
+local lastEspUpdate = 0
+local espObjects = {}
+local nameTags = {}
+
+local espSettings = {
+    Color = Color3.fromRGB(255, 255, 255),
+    SilhouetteColor = Color3.fromRGB(255, 105, 180),
+    SilhouetteTransparency = 0.5,
+    TextColor = Color3.fromRGB(255, 255, 255),
+    OutlineColor = Color3.fromRGB(0, 0, 0),
+    TextSize = 16,
+    ShowDisplayName = true,
+    ShowUsername = true
+}
+
+function getCrosshairColor()
+    return Color3.fromRGB(
+        SETTINGS.CROSSHAIR_COLOR_R or 255,
+        SETTINGS.CROSSHAIR_COLOR_G or 105,
+        SETTINGS.CROSSHAIR_COLOR_B or 180
+    )
+end
+
+function getWatermarkColor()
+    return Color3.fromRGB(
+        SETTINGS.WATERMARK_COLOR_R or 255,
+        SETTINGS.WATERMARK_COLOR_G or 105,
+        SETTINGS.WATERMARK_COLOR_B or 180
+    )
+end
+
+function getRadiusColor()
+    return Color3.fromRGB(
+        SETTINGS.RADIUS_COLOR_R or 255,
+        SETTINGS.RADIUS_COLOR_G or 105,
+        SETTINGS.RADIUS_COLOR_B or 180
+    )
+end
+
+function saveSettings()
+    local success, result = pcall(function()
+        local saveData = {
+            MAX_DISTANCE = SETTINGS.MAX_DISTANCE,
+            FOV_ANGLE = SETTINGS.FOV_ANGLE,
+            MAX_RADIUS = SETTINGS.MAX_RADIUS,
+            PRIORITIZE_LIMBS = SETTINGS.PRIORITIZE_LIMBS,
+            SHOW_RADIUS_CIRCLE = SETTINGS.SHOW_RADIUS_CIRCLE,
+            CIRCLE_TRANSPARENCY = SETTINGS.CIRCLE_TRANSPARENCY,
+            OBSTACLE_CHECK = SETTINGS.OBSTACLE_CHECK,
+            CAMERA_FOV = SETTINGS.CAMERA_FOV,
+            CROSSHAIR_ENABLED = SETTINGS.CROSSHAIR_ENABLED,
+            SHOW_PING = SETTINGS.SHOW_PING,
+            SHOW_FPS = SETTINGS.SHOW_FPS,
+            AIM_ENABLED = SETTINGS.AIM_ENABLED,
+            
+            AIM_HEAD = SETTINGS.AIM_HEAD,
+            AIM_TORSO = SETTINGS.AIM_TORSO,
+            AIM_LEFT_ARM = SETTINGS.AIM_LEFT_ARM,
+            AIM_RIGHT_ARM = SETTINGS.AIM_RIGHT_ARM,
+            AIM_LEFT_LEG = SETTINGS.AIM_LEFT_LEG,
+            AIM_RIGHT_LEG = SETTINGS.AIM_RIGHT_LEG,
+            
+            CROSSHAIR_COLOR_R = SETTINGS.CROSSHAIR_COLOR_R,
+            CROSSHAIR_COLOR_G = SETTINGS.CROSSHAIR_COLOR_G,
+            CROSSHAIR_COLOR_B = SETTINGS.CROSSHAIR_COLOR_B,
+            WATERMARK_COLOR_R = SETTINGS.WATERMARK_COLOR_R,
+            WATERMARK_COLOR_G = SETTINGS.WATERMARK_COLOR_G,
+            WATERMARK_COLOR_B = SETTINGS.WATERMARK_COLOR_B,
+            RADIUS_COLOR_R = SETTINGS.RADIUS_COLOR_R,
+            RADIUS_COLOR_G = SETTINGS.RADIUS_COLOR_G,
+            RADIUS_COLOR_B = SETTINGS.RADIUS_COLOR_B,
+            
+            ESP_ENABLED = espEnabled,
+            ESP_COLOR_R = math.floor(espSettings.Color.R * 255),
+            ESP_COLOR_G = math.floor(espSettings.Color.G * 255),
+            ESP_COLOR_B = math.floor(espSettings.Color.B * 255),
+            SILHOUETTE_ENABLED = silhouetteEnabled,
+            SILHOUETTE_COLOR_R = math.floor(espSettings.SilhouetteColor.R * 255),
+            SILHOUETTE_COLOR_G = math.floor(espSettings.SilhouetteColor.G * 255),
+            SILHOUETTE_COLOR_B = math.floor(espSettings.SilhouetteColor.B * 255),
+            SILHOUETTE_TRANSPARENCY = espSettings.SilhouetteTransparency,
+            NAMES_ENABLED = namesEnabled,
+            TEXT_COLOR_R = math.floor(espSettings.TextColor.R * 255),
+            TEXT_COLOR_G = math.floor(espSettings.TextColor.G * 255),
+            TEXT_COLOR_B = math.floor(espSettings.TextColor.B * 255),
+            OUTLINE_COLOR_R = math.floor(espSettings.OutlineColor.R * 255),
+            OUTLINE_COLOR_G = math.floor(espSettings.OutlineColor.G * 255),
+            OUTLINE_COLOR_B = math.floor(espSettings.OutlineColor.B * 255),
+            TEXT_SIZE = espSettings.TextSize,
+            ESP_THROUGH_WALLS = espThroughWalls,
+            MAX_ESP_DISTANCE = maxEspDistance,
+            ESP_UPDATE_INTERVAL = espUpdateInterval,
+            SHOW_DISPLAY_NAME = espSettings.ShowDisplayName,
+            SHOW_USERNAME = espSettings.ShowUsername
+        }
+        
+        local jsonData = HttpService:JSONEncode(saveData)
+        if writefile then
+            writefile(SETTINGS_FILENAME, jsonData)
+            return true
+        else
+            return false
+        end
+    end)
+    
+    if not success then
+        return false
+    end
+    return true
+end
+
+function loadSettings()
+    local success, result = pcall(function()
+        if not isfile or not isfile(SETTINGS_FILENAME) then
+            return nil
+        end
+        
+        local jsonData = readfile(SETTINGS_FILENAME)
+        local loadedSettings = HttpService:JSONDecode(jsonData)
+        
+        local mergedSettings = {}
+        for key, value in pairs(DEFAULT_SETTINGS) do
+            if loadedSettings[key] ~= nil then
+                mergedSettings[key] = loadedSettings[key]
+            else
+                mergedSettings[key] = value
+            end
+        end
+        
+        if loadedSettings.ESP_ENABLED ~= nil then
+            espEnabled = loadedSettings.ESP_ENABLED
+        else
+            espEnabled = false
+        end
+        if loadedSettings.SILHOUETTE_ENABLED ~= nil then
+            silhouetteEnabled = loadedSettings.SILHOUETTE_ENABLED
+        else
+            silhouetteEnabled = false
+        end
+        if loadedSettings.NAMES_ENABLED ~= nil then
+            namesEnabled = loadedSettings.NAMES_ENABLED
+        else
+            namesEnabled = false
+        end
+        if loadedSettings.ESP_THROUGH_WALLS ~= nil then
+            espThroughWalls = loadedSettings.ESP_THROUGH_WALLS
+        else
+            espThroughWalls = true
+        end
+        if loadedSettings.MAX_ESP_DISTANCE ~= nil then
+            maxEspDistance = loadedSettings.MAX_ESP_DISTANCE
+        else
+            maxEspDistance = 1000
+        end
+        if loadedSettings.ESP_UPDATE_INTERVAL ~= nil then
+            espUpdateInterval = loadedSettings.ESP_UPDATE_INTERVAL
+        else
+            espUpdateInterval = 1
+        end
+        
+        espSettings.Color = Color3.fromRGB(
+            loadedSettings.ESP_COLOR_R or 255,
+            loadedSettings.ESP_COLOR_G or 255,
+            loadedSettings.ESP_COLOR_B or 255
+        )
+        
+        espSettings.SilhouetteColor = Color3.fromRGB(
+            loadedSettings.SILHOUETTE_COLOR_R or 255,
+            loadedSettings.SILHOUETTE_COLOR_G or 105,
+            loadedSettings.SILHOUETTE_COLOR_B or 180
+        )
+        
+        espSettings.SilhouetteTransparency = loadedSettings.SILHOUETTE_TRANSPARENCY or 0.5
+        espSettings.TextColor = Color3.fromRGB(
+            loadedSettings.TEXT_COLOR_R or 255,
+            loadedSettings.TEXT_COLOR_G or 255,
+            loadedSettings.TEXT_COLOR_B or 255
+        )
+        
+        espSettings.OutlineColor = Color3.fromRGB(
+            loadedSettings.OUTLINE_COLOR_R or 0,
+            loadedSettings.OUTLINE_COLOR_G or 0,
+            loadedSettings.OUTLINE_COLOR_B or 0
+        )
+        
+        if loadedSettings.TEXT_SIZE ~= nil then
+            espSettings.TextSize = loadedSettings.TEXT_SIZE
+        else
+            espSettings.TextSize = 16
+        end
+        if loadedSettings.SHOW_DISPLAY_NAME ~= nil then
+            espSettings.ShowDisplayName = loadedSettings.SHOW_DISPLAY_NAME
+        else
+            espSettings.ShowDisplayName = true
+        end
+        if loadedSettings.SHOW_USERNAME ~= nil then
+            espSettings.ShowUsername = loadedSettings.SHOW_USERNAME
+        else
+            espSettings.ShowUsername = true
+        end
+        
+        return mergedSettings
+    end)
+    
+    if not success then
+        return nil
+    end
+    return result
+end
+
+local loadedSettings = loadSettings()
+if loadedSettings then
+    SETTINGS = loadedSettings
+    if SETTINGS.CAMERA_FOV then
+        camera.FieldOfView = SETTINGS.CAMERA_FOV
+        SETTINGS.FOV_ANGLE = SETTINGS.CAMERA_FOV
+    end
+else
+    SETTINGS = DEFAULT_SETTINGS
+end
+
+function getPing()
+    local function parsePingValue(valueString)
+        if not valueString then
+            return nil
+        end
+        local numeric = tonumber(string.match(tostring(valueString), "%d+"))
+        if numeric then
+            return numeric
+        end
+        return nil
+    end
+
+    local network = StatsService:FindFirstChild("Network")
+    if network then
+        local serverStats = network:FindFirstChild("ServerStatsItem")
+        if serverStats then
+            local pingItem = serverStats:FindFirstChild("Data Ping") or serverStats:FindFirstChild("Ping")
+            if pingItem then
+                if pingItem.GetValue then
+                    return math.floor(pingItem:GetValue())
+                end
+                if pingItem.GetValueString then
+                    local parsed = parsePingValue(pingItem:GetValueString())
+                    if parsed then
+                        return parsed
+                    end
+                end
+            end
+        end
+    end
+
+    local stats = StatsService:FindFirstChild("PerformanceStats")
+    if stats then
+        local pingStat = stats:FindFirstChild("Ping")
+        if pingStat then
+            return math.floor(pingStat:GetValue())
+        end
+    end
+    return 0
+end
+
+local function updateFPS()
+    fpsCounter = fpsCounter + 1
+end
+
+local fpsConnection = RunService.RenderStepped:Connect(updateFPS)
+table.insert(connections, fpsConnection)
+
+spawn(function()
+    while task.wait(1) do
+        fps = fpsCounter
+        fpsCounter = 0
+    end
+end)
+
+function createWatermark()
+    if watermark then
+        watermark.Gui:Destroy()
+    end
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AimlockWatermark"
+    screenGui.Parent = game.CoreGui
+    screenGui.ResetOnSpawn = false
+    table.insert(createdObjects, screenGui)
+    
+    local watermarkFrame = Instance.new("Frame")
+    watermarkFrame.Size = UDim2.new(0, 250, 0, 35)
+    watermarkFrame.Position = UDim2.new(0, 10, 1, -45)
+    watermarkFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+    watermarkFrame.BackgroundTransparency = 0.7
+    watermarkFrame.BorderSizePixel = 0
+    watermarkFrame.Parent = screenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = watermarkFrame
+    
+    local watermarkLabel = Instance.new("TextLabel")
+    watermarkLabel.Size = UDim2.new(0, 140, 1, 0)
+    watermarkLabel.Position = UDim2.new(0, 5, 0, 0)
+    watermarkLabel.BackgroundTransparency = 1
+    watermarkLabel.TextColor3 = Color3.new(1, 1, 1)
+    watermarkLabel.Text = "Aimlock by slrNova"
+    watermarkLabel.Font = Enum.Font.GothamBold
+    watermarkLabel.TextSize = 14
+    watermarkLabel.TextXAlignment = Enum.TextXAlignment.Left
+    watermarkLabel.TextYAlignment = Enum.TextYAlignment.Center
+    watermarkLabel.Parent = watermarkFrame
+    
+    watermark = {
+        Gui = screenGui,
+        Frame = watermarkFrame,
+        Label = watermarkLabel
+    }
+    
+    updateWatermarkVisibility()
+    return watermark
+end
+
+function updateWatermarkVisibility()
+    if not watermark then return end
+    
+    local currentX = 145
+    
+    for _, child in ipairs(watermark.Frame:GetChildren()) do
+        if child.Name == "Separator" or child.Name == "PingLabel" or child.Name == "FPSLabel" then
+            child:Destroy()
+        end
+    end
+    
+    if SETTINGS.SHOW_PING then
+        local separator = Instance.new("TextLabel")
+        separator.Name = "Separator"
+        separator.Size = UDim2.new(0, 20, 1, 0)
+        separator.Position = UDim2.new(0, currentX, 0, 0)
+        separator.BackgroundTransparency = 1
+        separator.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+        separator.Text = "|"
+        separator.Font = Enum.Font.GothamBold
+        separator.TextSize = 14
+        separator.TextXAlignment = Enum.TextXAlignment.Center
+        separator.TextYAlignment = Enum.TextYAlignment.Center
+        separator.Parent = watermark.Frame
+        
+        currentX = currentX + 20
+        
+        local pingLabel = Instance.new("TextLabel")
+        pingLabel.Name = "PingLabel"
+        pingLabel.Size = UDim2.new(0, 80, 1, 0)
+        pingLabel.Position = UDim2.new(0, currentX, 0, 0)
+        pingLabel.BackgroundTransparency = 1
+        pingLabel.TextColor3 = Color3.new(1, 1, 1)
+        pingLabel.Text = "Ping: 0ms"
+        pingLabel.Font = Enum.Font.GothamBold
+        pingLabel.TextSize = 14
+        pingLabel.TextXAlignment = Enum.TextXAlignment.Left
+        pingLabel.TextYAlignment = Enum.TextYAlignment.Center
+        pingLabel.Parent = watermark.Frame
+        
+        currentX = currentX + 80
+        
+        if SETTINGS.SHOW_FPS then
+            local separator2 = Instance.new("TextLabel")
+            separator2.Name = "Separator2"
+            separator2.Size = UDim2.new(0, 20, 1, 0)
+            separator2.Position = UDim2.new(0, currentX, 0, 0)
+            separator2.BackgroundTransparency = 1
+            separator2.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+            separator2.Text = "|"
+            separator2.Font = Enum.Font.GothamBold
+            separator2.TextSize = 14
+            separator2.TextXAlignment = Enum.TextXAlignment.Center
+            separator2.TextYAlignment = Enum.TextYAlignment.Center
+            separator2.Parent = watermark.Frame
+            
+            currentX = currentX + 20
+            
+            local fpsLabel = Instance.new("TextLabel")
+            fpsLabel.Name = "FPSLabel"
+            fpsLabel.Size = UDim2.new(0, 80, 1, 0)
+            fpsLabel.Position = UDim2.new(0, currentX, 0, 0)
+            fpsLabel.BackgroundTransparency = 1
+            fpsLabel.TextColor3 = Color3.new(1, 1, 1)
+            fpsLabel.Text = "FPS: 0"
+            fpsLabel.Font = Enum.Font.GothamBold
+            fpsLabel.TextSize = 14
+            fpsLabel.TextXAlignment = Enum.TextXAlignment.Left
+            fpsLabel.TextYAlignment = Enum.TextYAlignment.Center
+            fpsLabel.Parent = watermark.Frame
+            
+            currentX = currentX + 80
+        end
+    elseif SETTINGS.SHOW_FPS then
+        local separator = Instance.new("TextLabel")
+        separator.Name = "Separator"
+        separator.Size = UDim2.new(0, 20, 1, 0)
+        separator.Position = UDim2.new(0, currentX, 0, 0)
+        separator.BackgroundTransparency = 1
+        separator.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+        separator.Text = "|"
+        separator.Font = Enum.Font.GothamBold
+        separator.TextSize = 14
+        separator.TextXAlignment = Enum.TextXAlignment.Center
+        separator.TextYAlignment = Enum.TextYAlignment.Center
+        separator.Parent = watermark.Frame
+        
+        currentX = currentX + 20
+        
+        local fpsLabel = Instance.new("TextLabel")
+        fpsLabel.Name = "FPSLabel"
+        fpsLabel.Size = UDim2.new(0, 80, 1, 0)
+        fpsLabel.Position = UDim2.new(0, currentX, 0, 0)
+        fpsLabel.BackgroundTransparency = 1
+        fpsLabel.TextColor3 = Color3.new(1, 1, 1)
+        fpsLabel.Text = "FPS: 0"
+        fpsLabel.Font = Enum.Font.GothamBold
+        fpsLabel.TextSize = 14
+        fpsLabel.TextXAlignment = Enum.TextXAlignment.Left
+        fpsLabel.TextYAlignment = Enum.TextYAlignment.Center
+        fpsLabel.Parent = watermark.Frame
+        
+        currentX = currentX + 80
+    end
+    
+    watermark.Frame.Size = UDim2.new(0, currentX - 5, 0, 35)
+end
+
+function updateWatermarkColor()
+    if not watermark or not watermark.Label then
+        createWatermark()
+        return
+    end
+    
+    if isAiming then
+        watermark.Label.TextColor3 = getWatermarkColor()
+    else
+        watermark.Label.TextColor3 = Color3.new(1, 1, 1)
+    end
+end
+
+function removeWatermark()
+    if watermark then
+        watermark.Gui:Destroy()
+        watermark = nil
+    end
+end
+
+function createCrosshair()
+    if not SETTINGS.CROSSHAIR_ENABLED then return end
+    
+    if currentCrosshair then
+        currentCrosshair:Destroy()
+    end
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AimlockCrosshair"
+    screenGui.Parent = game.CoreGui
+    screenGui.ResetOnSpawn = false
+    table.insert(createdObjects, screenGui)
+    
+    local centerDot = Instance.new("Frame")
+    centerDot.Size = UDim2.new(0, 6, 0, 6)
+    centerDot.AnchorPoint = Vector2.new(0.5, 0.5)
+    centerDot.BackgroundColor3 = getCrosshairColor()
+    centerDot.BorderSizePixel = 0
+    centerDot.ZIndex = 999
+    
+    local dotConnection
+    dotConnection = RunService.RenderStepped:Connect(function()
+        if centerDot and centerDot.Parent then
+            local mousePos = Vector2.new(mouse.X, mouse.Y)
+            centerDot.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y)
+        else
+            dotConnection:Disconnect()
+        end
+    end)
+    table.insert(connections, dotConnection)
+    
+    centerDot.Parent = screenGui
+    
+    if SETTINGS.SHOW_RADIUS_CIRCLE then
+        local radiusCircle = Instance.new("Frame")
+        radiusCircle.Size = UDim2.new(0, SETTINGS.MAX_RADIUS * 2, 0, SETTINGS.MAX_RADIUS * 2)
+        radiusCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+        radiusCircle.BackgroundColor3 = Color3.new(1, 1, 1)
+        radiusCircle.BackgroundTransparency = 1
+        radiusCircle.BorderSizePixel = 2
+        radiusCircle.BorderColor3 = getRadiusColor()
+        radiusCircle.BorderMode = Enum.BorderMode.Outline
+        radiusCircle.ZIndex = 998
+        
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = getRadiusColor()
+        stroke.Thickness = 2
+        stroke.Transparency = SETTINGS.CIRCLE_TRANSPARENCY
+        stroke.Parent = radiusCircle
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(1, 0)
+        corner.Parent = radiusCircle
+        
+        local circleConnection
+        circleConnection = RunService.RenderStepped:Connect(function()
+            if radiusCircle and radiusCircle.Parent then
+                local mousePos = Vector2.new(mouse.X, mouse.Y)
+                radiusCircle.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y)
+            else
+                circleConnection:Disconnect()
+            end
+        end)
+        table.insert(connections, circleConnection)
+        
+        radiusCircle.Parent = screenGui
+    end
+    
+    currentCrosshair = screenGui
+    return screenGui
+end
+
+function removeCrosshair()
+    if currentCrosshair then
+        currentCrosshair:Destroy()
+        currentCrosshair = nil
+    end
+end
+
+function updateCrosshairColors()
+    if currentCrosshair then
+        for _, obj in pairs(currentCrosshair:GetDescendants()) do
+            if obj:IsA("Frame") and obj.Name ~= "" then
+                if obj.Name == "CenterDot" or (obj.BackgroundColor3 and obj.BackgroundColor3 == getCrosshairColor()) then
+                    obj.BackgroundColor3 = getCrosshairColor()
+                end
+                if obj.BorderColor3 and obj.BorderColor3 == getRadiusColor() then
+                    obj.BorderColor3 = getRadiusColor()
+                end
+            elseif obj:IsA("UIStroke") then
+                obj.Color = getRadiusColor()
+            end
+        end
+    end
+end
+
+function getAngleBetween(v1, v2)
+    local dot = v1.Unit:Dot(v2.Unit)
+    dot = math.clamp(dot, -1, 1)
+    return math.deg(math.acos(dot))
+end
+
+function hasClearLineOfSight(origin, targetPart)
+    if not SETTINGS.OBSTACLE_CHECK then return true end
+    
+    local direction = (targetPart.Position - origin).Unit
+    local distance = (targetPart.Position - origin).Magnitude
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {localPlayer.Character, targetPart.Parent}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.IgnoreWater = true
+    
+    local raycastResult = Workspace:Raycast(origin, direction * distance, raycastParams)
+    
+    if raycastResult then
+        local hitParent = raycastResult.Instance:FindFirstAncestorOfClass("Model")
+        if hitParent ~= targetPart.Parent then
+            return false
+        end
+    end
+    
+    return true
+end
+
+function findBestTarget()
+    if not SETTINGS.AIM_ENABLED then return nil end
+    
+    local bestTarget = nil
+    local mousePos = Vector2.new(mouse.X, mouse.Y)
+    local localCharacter = localPlayer.Character
+    local localHead = localCharacter and localCharacter:FindFirstChild("Head")
+    local rayOrigin = localHead and localHead.Position or camera.CFrame.Position
+    local validTargets = {}
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == localPlayer then continue end
+        
+        local character = player.Character
+        if not character then continue end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then continue end
+        
+        local targetParts = {}
+        
+        if SETTINGS.PRIORITIZE_LIMBS then
+            if SETTINGS.AIM_LEFT_LEG then
+                local leftLeg = character:FindFirstChild("Left Leg")
+                if leftLeg then table.insert(targetParts, {Part = leftLeg, Type = "LEFT_LEG", Priority = 4}) end
+            end
+            
+            if SETTINGS.AIM_RIGHT_LEG then
+                local rightLeg = character:FindFirstChild("Right Leg")
+                if rightLeg then table.insert(targetParts, {Part = rightLeg, Type = "RIGHT_LEG", Priority = 4}) end
+            end
+            
+            if SETTINGS.AIM_LEFT_ARM then
+                local leftArm = character:FindFirstChild("Left Arm")
+                if leftArm then table.insert(targetParts, {Part = leftArm, Type = "LEFT_ARM", Priority = 3}) end
+            end
+            
+            if SETTINGS.AIM_RIGHT_ARM then
+                local rightArm = character:FindFirstChild("Right Arm")
+                if rightArm then table.insert(targetParts, {Part = rightArm, Type = "RIGHT_ARM", Priority = 3}) end
+            end
+            
+            if SETTINGS.AIM_HEAD then
+                local headPart = character:FindFirstChild("Head")
+                if headPart then table.insert(targetParts, {Part = headPart, Type = "HEAD", Priority = 2}) end
+            end
+            
+            if SETTINGS.AIM_TORSO then
+                local bodyPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso")
+                if bodyPart then table.insert(targetParts, {Part = bodyPart, Type = "BODY", Priority = 1}) end
+            end
+        else
+            if SETTINGS.AIM_HEAD then
+                local headPart = character:FindFirstChild("Head")
+                if headPart then table.insert(targetParts, {Part = headPart, Type = "HEAD", Priority = 2}) end
+            end
+            
+            if SETTINGS.AIM_TORSO then
+                local bodyPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso")
+                if bodyPart then table.insert(targetParts, {Part = bodyPart, Type = "BODY", Priority = 1}) end
+            end
+        end
+        
+        for _, targetInfo in ipairs(targetParts) do
+            local targetPart = targetInfo.Part
+            local distance3D = (rayOrigin - targetPart.Position).Magnitude
+            if distance3D > SETTINGS.MAX_DISTANCE then continue end
+            
+            local cameraLook = camera.CFrame.LookVector
+            local toTarget = (targetPart.Position - camera.CFrame.Position)
+            local angle = getAngleBetween(cameraLook, toTarget)
+            if angle > SETTINGS.FOV_ANGLE / 2 then continue end
+            
+            local screenPoint, onScreen = camera:WorldToScreenPoint(targetPart.Position)
+            if not onScreen then continue end
+            
+            local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
+            local distanceToCursor = (screenPos - mousePos).Magnitude
+            if distanceToCursor > SETTINGS.MAX_RADIUS then continue end
+            
+            table.insert(validTargets, {
+                Part = targetPart,
+                Player = player,
+                DistanceToCursor = distanceToCursor,
+                Distance3D = distance3D,
+                ScreenPosition = screenPos,
+                Angle = angle,
+                Type = targetInfo.Type,
+                Priority = targetInfo.Priority
+            })
+        end
+    end
+    
+    if #validTargets == 0 then return nil end
+    
+    table.sort(validTargets, function(a, b)
+        if a.DistanceToCursor ~= b.DistanceToCursor then
+            return a.DistanceToCursor < b.DistanceToCursor
+        end
+        if SETTINGS.PRIORITIZE_LIMBS and a.Priority ~= b.Priority then
+            return a.Priority > b.Priority
+        end
+        return a.Distance3D < b.Distance3D
+    end)
+    
+    bestTarget = validTargets[1]
+    
+    if SETTINGS.OBSTACLE_CHECK then
+        if bestTarget.Type == "LEFT_LEG" or bestTarget.Type == "RIGHT_LEG" or bestTarget.Type == "LEFT_ARM" or bestTarget.Type == "RIGHT_ARM" then
+            if not hasClearLineOfSight(rayOrigin, bestTarget.Part) then
+                for i = 2, #validTargets do
+                    local nextTarget = validTargets[i]
+                    if nextTarget.Type == "HEAD" or nextTarget.Type == "BODY" or hasClearLineOfSight(rayOrigin, nextTarget.Part) then
+                        bestTarget = nextTarget
+                        bestTarget.HasObstacle = false
+                        break
+                    end
+                end
+            else
+                bestTarget.HasObstacle = false
+            end
+        else
+            bestTarget.HasObstacle = false
+        end
+    else
+        bestTarget.HasObstacle = false
+    end
+    
+    return bestTarget
+end
+
+function aimAtTarget()
+    if not SETTINGS.AIM_ENABLED then return end
+    local targetInfo = findBestTarget()
+    if not targetInfo then return end
+    camera.CFrame = CFrame.new(camera.CFrame.Position, targetInfo.Part.Position)
+end
+
+function toggleAimEnabled()
+    SETTINGS.AIM_ENABLED = not SETTINGS.AIM_ENABLED
+    saveSettings()
+    
+    if not SETTINGS.AIM_ENABLED then
+        if isAiming then
+            isAiming = false
+            updateWatermarkColor()
+            if aimConnection then
+                aimConnection:Disconnect()
+                aimConnection = nil
+            end
+            removeCrosshair()
+        end
+    end
+    
+    notify({
+        Title = "Aimlock",
+        Content = SETTINGS.AIM_ENABLED and "Aim ENABLED" or "Aim DISABLED",
+        Duration = 2,
+        Image = 4483362458
+    })
+    
+    return SETTINGS.AIM_ENABLED
+end
+
+local function toggleAntiLag()
+    antiLagToggle = not antiLagToggle
+    local scriptObj = localPlayer.PlayerScripts:FindFirstChild("CharacterAndBeamMove")
+    
+    if scriptObj then
+        scriptObj.Enabled = not scriptObj.Enabled
+        local statusText = scriptObj.Enabled and "Disabled" or "Enabled"
+        notify({
+            Title = "Anti Lag",
+            Content = statusText,
+            Duration = 2,
+            Image = 4483362458
+        })
+    else
+        notify({
+            Title = "Error",
+            Content = "CharacterAndBeamMove not found",
+            Duration = 2,
+            Image = 4483362458
+        })
+    end
+end
+
+local function toggleLoopReset()
+    respawnToggle = not respawnToggle
+    notify({
+        Title = "Loop Reset",
+        Content = respawnToggle and "Enabled" or "Disabled",
+        Duration = 2,
+        Image = 4483362458
+    })
+    
+    if respawnToggle then
+        spawn(function()
+            while respawnToggle and task.wait() do
+                local Char = me.Character or me.CharacterAdded:Wait()
+                local Hum = Char and Char:FindFirstChild("Humanoid")
+                if Hum then
+                    Hum.Health = 0
+                end
+            end
+        end)
+    end
+end
+
+local function setupHotkeys()
+    local hotkeyConnection
+    hotkeyConnection = UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        
+        if input.KeyCode == ANTI_LAG_KEY then
+            toggleAntiLag()
+        elseif input.KeyCode == LOOP_RESET_KEY then
+            toggleLoopReset()
+        end
+    end)
+    table.insert(connections, hotkeyConnection)
+    return hotkeyConnection
+end
+
+
+function createNameTag(player)
+    if not player or player == localPlayer then return end
+    
+    removeNameTag(player)
+    
+    local character = player.Character
+    if not character then return end
+    
+    local head = character:WaitForChild("Head", 1)
+    if not head then return end
+    
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "NameTag_" .. player.Name
+    billboard.Adornee = head
+    billboard.Size = UDim2.new(0, 200, 0, 30)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Enabled = namesEnabled
+    billboard.Parent = head
+    
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Name = "NameLabel"
+    nameLabel.Size = UDim2.new(1, 0, 1, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = formatPlayerName(player)
+    nameLabel.TextColor3 = espSettings.TextColor
+    nameLabel.TextSize = espSettings.TextSize
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextStrokeColor3 = espSettings.OutlineColor
+    nameLabel.TextStrokeTransparency = 0.3
+    nameLabel.TextYAlignment = Enum.TextYAlignment.Center
+    nameLabel.Parent = billboard
+    
+    nameTags[player] = billboard
+    
+    return billboard
+end
+
+function formatPlayerName(player)
+    local displayName = player.DisplayName
+    local username = player.Name
+    
+    if espSettings.ShowDisplayName and espSettings.ShowUsername then
+        return displayName .. " (@" .. username .. ")"
+    elseif espSettings.ShowDisplayName then
+        return displayName
+    elseif espSettings.ShowUsername then
+        return "@" .. username
+    else
+        return ""
+    end
+end
+
+function removeNameTag(player)
+    if nameTags[player] then
+        nameTags[player]:Destroy()
+        nameTags[player] = nil
+    end
+end
+
+function updateNameTags()
+    for player, tag in pairs(nameTags) do
+        if not player or not player.Parent then
+            removeNameTag(player)
+            continue
+        end
+        
+        local character = player.Character
+        if not character then
+            removeNameTag(player)
+            continue
+        end
+        
+        local cameraPos = camera.CFrame.Position
+        local characterPos = character:GetPivot().Position
+        local distance = (cameraPos - characterPos).Magnitude
+        
+        local nameLabel = tag:FindFirstChild("NameLabel")
+        if nameLabel then
+            nameLabel.Text = formatPlayerName(player)
+            nameLabel.TextColor3 = espSettings.TextColor
+            nameLabel.TextStrokeColor3 = espSettings.OutlineColor
+            nameLabel.TextSize = espSettings.TextSize
+            
+            local textSize = espSettings.TextSize
+            if distance > 100 then
+                textSize = math.max(espSettings.TextSize - 2, 10)
+            elseif distance > 50 then
+                textSize = espSettings.TextSize
+            else
+                textSize = math.min(espSettings.TextSize + 2, 20)
+            end
+            nameLabel.TextSize = textSize
+            
+            tag.Enabled = namesEnabled and (distance <= maxEspDistance)
+        end
+        
+        local head = character:FindFirstChild("Head")
+        if head then
+            tag.Adornee = head
+        end
+    end
+end
+
+function createNameTagsForAll()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            createNameTag(player)
+        end
+    end
+end
+
+function clearAllNameTags()
+    for player, _ in pairs(nameTags) do
+        removeNameTag(player)
+    end
+    nameTags = {}
+end
+
+function setupNameEspConnections()
+    if namesEnabled then
+        createNameTagsForAll()
+    end
+    
+    Players.PlayerAdded:Connect(function(player)
+        if namesEnabled then
+            createNameTag(player)
+        end
+        
+        player.CharacterAdded:Connect(function(character)
+            wait(0.1)
+            if namesEnabled then
+                createNameTag(player)
+            end
+        end)
+    end)
+    
+    Players.PlayerRemoving:Connect(function(player)
+        removeNameTag(player)
+    end)
+    
+    spawn(function()
+        while true do
+            if namesEnabled then
+                updateNameTags()
+            end
+            task.wait(espUpdateInterval)
+        end
+    end)
+end
+
+
+function createEsp(player)
+    if not player or player == localPlayer then return end
+    
+    local character = player.Character
+    if not character then return end
+    
+    removeEsp(player)
+    
+    espObjects[player] = {}
+    
+    if espEnabled then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "ESP_Highlight"
+        highlight.Adornee = character
+        highlight.DepthMode = espThroughWalls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+        highlight.FillColor = Color3.new(0, 0, 0)
+        highlight.FillTransparency = 1
+        highlight.OutlineColor = espSettings.Color
+        highlight.OutlineTransparency = 0
+        highlight.Parent = character
+        table.insert(espObjects[player], highlight)
+    end
+    
+    if silhouetteEnabled then
+        local silhouette = Instance.new("Highlight")
+        silhouette.Name = "ESP_Silhouette"
+        silhouette.Adornee = character
+        silhouette.DepthMode = espThroughWalls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+        silhouette.FillColor = espSettings.SilhouetteColor
+        silhouette.FillTransparency = espSettings.SilhouetteTransparency
+        silhouette.OutlineColor = Color3.new(0, 0, 0)
+        silhouette.OutlineTransparency = 1
+        silhouette.Parent = character
+        table.insert(espObjects[player], silhouette)
+    end
+end
+
+function removeEsp(player)
+    if espObjects[player] then
+        for _, obj in ipairs(espObjects[player]) do
+            if obj and obj.Parent then
+                obj:Destroy()
+            end
+        end
+        espObjects[player] = nil
+    end
+end
+
+function updateEsp()
+    if not (espEnabled or silhouetteEnabled) then return end
+    
+    for player, objects in pairs(espObjects) do
+        if not player or not player.Parent then
+            removeEsp(player)
+            continue
+        end
+        
+        local character = player.Character
+        if not character then
+            removeEsp(player)
+            continue
+        end
+        
+        local cameraPos = camera.CFrame.Position
+        local characterPos = character:GetPivot().Position
+        local distance = (cameraPos - characterPos).Magnitude
+        
+        for _, obj in ipairs(objects) do
+            if obj:IsA("Highlight") then
+                if obj.Name == "ESP_Highlight" then
+                    obj.OutlineColor = espSettings.Color
+                    obj.DepthMode = espThroughWalls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+                    obj.Enabled = distance <= maxEspDistance
+                    obj.Adornee = character
+                elseif obj.Name == "ESP_Silhouette" then
+                    obj.FillColor = espSettings.SilhouetteColor
+                    obj.FillTransparency = espSettings.SilhouetteTransparency
+                    obj.DepthMode = espThroughWalls and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+                    obj.Enabled = distance <= maxEspDistance
+                    obj.Adornee = character
+                end
+            end
+        end
+    end
+end
+
+function checkAndCreateEsp()
+    if not (espEnabled or silhouetteEnabled) then return end
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == localPlayer then continue end
+        
+        local character = player.Character
+        if character and not espObjects[player] then
+            createEsp(player)
+        end
+    end
+end
+
+function refreshAllEsp()
+    for player, _ in pairs(espObjects) do
+        removeEsp(player)
+    end
+    espObjects = {}
+    
+    clearAllNameTags()
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= localPlayer and player.Character then
+            createEsp(player)
+            if namesEnabled then
+                createNameTag(player)
+            end
+        end
+    end
+end
+
+local function setupPlayerConnections()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == localPlayer then continue end
+        
+        if player.Character then
+            createEsp(player)
+            if namesEnabled then
+                createNameTag(player)
+            end
+        end
+        
+        player.CharacterAdded:Connect(function(character)
+            wait(0.1)
+            createEsp(player)
+            if namesEnabled then
+                createNameTag(player)
+            end
+        end)
+        
+        player.CharacterRemoving:Connect(function()
+            removeEsp(player)
+            removeNameTag(player)
+        end)
+    end
+    
+    Players.PlayerAdded:Connect(function(player)
+        player.CharacterAdded:Connect(function(character)
+            wait(0.1)
+            createEsp(player)
+            if namesEnabled then
+                createNameTag(player)
+            end
+        end)
+    end)
+end
+
+function startVisualsUpdateLoop()
+    setupPlayerConnections()
+    
+    spawn(function()
+        while true do
+            local currentTime = tick()
+            
+            if currentTime - lastEspUpdate >= espUpdateInterval then
+                lastEspUpdate = currentTime
+                
+                checkAndCreateEsp()
+                updateEsp()
+                if namesEnabled then
+                    updateNameTags()
+                end
+            end
+            
+            task.wait(0.1)
+        end
+    end)
+end
+
+local Window = WindUI:CreateWindow({
+    Title = "aimlock interface",
+    Author = "slrNova",
+    Icon = "solar:target-linear",
+    IconThemed = true,
+    Folder = "Aimlock",
+    Size = UDim2.new(0, 760, 0, 590),
+    Transparent = true,
+    Acrylic = true,
+    SideBarWidth = 240,
+    ScrollBarEnabled = false,
+    Theme = "Dark",
+    NewElements = true,
+})
+
+local ui = {}
+
+Window:SetToggleKey(Enum.KeyCode.K)
+
+Window:OnClose(function()
+    notify({
+        Title = "Menu",
+        Content = "Menu opens with K",
+        Duration = 2
+    })
+end)
+
+local MainTab = Window:Tab({Title = "Main", Icon = "solar:target-linear"})
+MainTab:Section({Title = "Aimlock Control"})
+
+ui.AimEnabledToggle = MainTab:Toggle({
+    Title = "Enable Aimlock",
+    Value = SETTINGS.AIM_ENABLED,
+    Callback = function(Value)
+        SETTINGS.AIM_ENABLED = Value
+        saveSettings()
+        if not Value and isAiming then
+            isAiming = false
+            updateWatermarkColor()
+            if aimConnection then
+                aimConnection:Disconnect()
+                aimConnection = nil
+            end
+            removeCrosshair()
+        end
+        notify({
+            Title = "Aimlock",
+            Content = Value and "Aim ENABLED" or "Aim DISABLED",
+            Duration = 2,
+            Icon = "solar:target-bold"
+        })
+    end,
+})
+
+ui.CrosshairToggle = MainTab:Toggle({
+    Title = "Enable Crosshair",
+    Value = SETTINGS.CROSSHAIR_ENABLED,
+    Callback = function(Value)
+        SETTINGS.CROSSHAIR_ENABLED = Value
+        if not Value and currentCrosshair then
+            removeCrosshair()
+        end
+        saveSettings()
+    end,
+})
+
+MainTab:Section({Title = "Aim Settings"})
+
+ui.AimRadiusSlider = MainTab:Slider({
+    Title = "Aim Radius",
+    Desc = "Pixels",
+    Value = {Min = 50, Max = 500, Default = SETTINGS.MAX_RADIUS},
+    Step = 10,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        SETTINGS.MAX_RADIUS = numeric
+        if isAiming and SETTINGS.CROSSHAIR_ENABLED then
+            createCrosshair()
+        end
+        saveSettings()
+    end,
+})
+
+ui.MaxDistanceSlider = MainTab:Slider({
+    Title = "Max Distance",
+    Desc = "Studs",
+    Value = {Min = 20, Max = 200, Default = SETTINGS.MAX_DISTANCE},
+    Step = 5,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        SETTINGS.MAX_DISTANCE = numeric
+        saveSettings()
+    end,
+})
+
+ui.CameraFOVSlider = MainTab:Slider({
+    Title = "Camera & Aim FOV",
+    Desc = "Degrees",
+    Value = {Min = 1, Max = 120, Default = SETTINGS.CAMERA_FOV},
+    Step = 1,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        SETTINGS.CAMERA_FOV = numeric
+        SETTINGS.FOV_ANGLE = numeric
+        camera.FieldOfView = numeric
+        saveSettings()
+    end,
+})
+
+MainTab:Section({Title = "Aim Parts"})
+
+MainTab:Paragraph({
+    Title = "PRIORITIZE LIMBS ONLY for CUSTOM BODY PARTS",
+    Color = Color3.fromRGB(255, 0, 0)
+})
+
+MainTab:Section({Title = "Targeting Settings"})
+
+ui.PrioritizeLimbsToggle = MainTab:Toggle({
+    Title = "Prioritize Limbs",
+    Value = SETTINGS.PRIORITIZE_LIMBS,
+    Callback = function(Value)
+        SETTINGS.PRIORITIZE_LIMBS = Value
+        saveSettings()
+    end,
+})
+
+ui.ObstacleCheckToggle = MainTab:Toggle({
+    Title = "Obstacle Check",
+    Value = SETTINGS.OBSTACLE_CHECK,
+    Callback = function(Value)
+        SETTINGS.OBSTACLE_CHECK = Value
+        saveSettings()
+    end,
+})
+
+MainTab:Section({Title = "Custom Body Parts"})
+
+ui.AimHeadToggle = MainTab:Toggle({
+    Title = "Aim at Head",
+    Value = SETTINGS.AIM_HEAD,
+    Callback = function(Value)
+        SETTINGS.AIM_HEAD = Value
+        saveSettings()
+    end,
+})
+
+ui.AimTorsoToggle = MainTab:Toggle({
+    Title = "Aim at Torso",
+    Value = SETTINGS.AIM_TORSO,
+    Callback = function(Value)
+        SETTINGS.AIM_TORSO = Value
+        saveSettings()
+    end,
+})
+
+ui.AimLeftArmToggle = MainTab:Toggle({
+    Title = "Aim at Left Arm",
+    Value = SETTINGS.AIM_LEFT_ARM,
+    Callback = function(Value)
+        SETTINGS.AIM_LEFT_ARM = Value
+        saveSettings()
+    end,
+})
+
+ui.AimRightArmToggle = MainTab:Toggle({
+    Title = "Aim at Right Arm",
+    Value = SETTINGS.AIM_RIGHT_ARM,
+    Callback = function(Value)
+        SETTINGS.AIM_RIGHT_ARM = Value
+        saveSettings()
+    end,
+})
+
+ui.AimLeftLegToggle = MainTab:Toggle({
+    Title = "Aim at Left Leg",
+    Value = SETTINGS.AIM_LEFT_LEG,
+    Callback = function(Value)
+        SETTINGS.AIM_LEFT_LEG = Value
+        saveSettings()
+    end,
+})
+
+ui.AimRightLegToggle = MainTab:Toggle({
+    Title = "Aim at Right Leg",
+    Value = SETTINGS.AIM_RIGHT_LEG,
+    Callback = function(Value)
+        SETTINGS.AIM_RIGHT_LEG = Value
+        saveSettings()
+    end,
+})
+
+MainTab:Section({Title = "Color Settings"})
+
+ui.CrosshairColorPicker = MainTab:Colorpicker({
+    Title = "Crosshair Color",
+    Default = Color3.fromRGB(SETTINGS.CROSSHAIR_COLOR_R, SETTINGS.CROSSHAIR_COLOR_G, SETTINGS.CROSSHAIR_COLOR_B),
+    Callback = function(Color)
+        SETTINGS.CROSSHAIR_COLOR_R = math.floor(Color.R * 255)
+        SETTINGS.CROSSHAIR_COLOR_G = math.floor(Color.G * 255)
+        SETTINGS.CROSSHAIR_COLOR_B = math.floor(Color.B * 255)
+        saveSettings()
+        updateCrosshairColors()
+    end,
+})
+
+ui.WatermarkColorPicker = MainTab:Colorpicker({
+    Title = "Watermark Color (when aiming)",
+    Default = Color3.fromRGB(SETTINGS.WATERMARK_COLOR_R, SETTINGS.WATERMARK_COLOR_G, SETTINGS.WATERMARK_COLOR_B),
+    Callback = function(Color)
+        SETTINGS.WATERMARK_COLOR_R = math.floor(Color.R * 255)
+        SETTINGS.WATERMARK_COLOR_G = math.floor(Color.G * 255)
+        SETTINGS.WATERMARK_COLOR_B = math.floor(Color.B * 255)
+        saveSettings()
+        updateWatermarkColor()
+    end,
+})
+
+ui.RadiusColorPicker = MainTab:Colorpicker({
+    Title = "Radius Circle Color",
+    Default = Color3.fromRGB(SETTINGS.RADIUS_COLOR_R, SETTINGS.RADIUS_COLOR_G, SETTINGS.RADIUS_COLOR_B),
+    Callback = function(Color)
+        SETTINGS.RADIUS_COLOR_R = math.floor(Color.R * 255)
+        SETTINGS.RADIUS_COLOR_G = math.floor(Color.G * 255)
+        SETTINGS.RADIUS_COLOR_B = math.floor(Color.B * 255)
+        saveSettings()
+        updateCrosshairColors()
+    end,
+})
+
+local VisualsTab = Window:Tab({Title = "Visuals", Icon = "solar:eye-linear"})
+
+VisualsTab:Section({Title = "ESP System Settings"})
+
+ui.EspUpdateSlider = VisualsTab:Slider({
+    Title = "ESP Update Interval",
+    Desc = "Seconds",
+    Value = {Min = 0.1, Max = 5, Default = espUpdateInterval},
+    Step = 0.1,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        espUpdateInterval = numeric
+        saveSettings()
+    end,
+})
+
+ui.MaxEspDistanceSlider = VisualsTab:Slider({
+    Title = "Max ESP Distance",
+    Desc = "Studs",
+    Value = {Min = 60, Max = 2500, Default = maxEspDistance},
+    Step = 10,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        maxEspDistance = numeric
+        updateEsp()
+        if namesEnabled then
+            updateNameTags()
+        end
+        saveSettings()
+    end,
+})
+
+ui.EspThroughWallsToggle = VisualsTab:Toggle({
+    Title = "ESP Through Walls",
+    Value = espThroughWalls,
+    Callback = function(Value)
+        espThroughWalls = Value
+        updateEsp()
+        saveSettings()
+        notify({
+            Title = "ESP Through Walls",
+            Content = Value and "ENABLED" or "DISABLED",
+            Duration = 2,
+            Icon = "solar:shield-keyhole-linear"
+        })
+    end,
+})
+
+VisualsTab:Section({Title = "Player ESP"})
+
+ui.EspEnabledToggle = VisualsTab:Toggle({
+    Title = "Enable Player ESP",
+    Value = espEnabled,
+    Callback = function(Value)
+        espEnabled = Value
+        if Value then
+            for _, player in pairs(Players:GetPlayers()) do
+                if player ~= localPlayer and player.Character then
+                    createEsp(player)
+                end
+            end
+        else
+            for player, _ in pairs(espObjects) do
+                removeEsp(player)
+            end
+            espObjects = {}
+        end
+        updateEsp()
+        saveSettings()
+        notify({
+            Title = "Player ESP",
+            Content = Value and "ENABLED" or "DISABLED",
+            Duration = 2,
+            Icon = "solar:eye-linear"
+        })
+    end,
+})
+
+ui.EspColorPicker = VisualsTab:Colorpicker({
+    Title = "ESP Color",
+    Default = espSettings.Color,
+    Callback = function(Color)
+        espSettings.Color = Color
+        updateEsp()
+        saveSettings()
+    end,
+})
+
+VisualsTab:Section({Title = "Player ESP Fill"})
+
+ui.SilhouetteEnabledToggle = VisualsTab:Toggle({
+    Title = "Enable Player ESP Fill",
+    Value = silhouetteEnabled,
+    Callback = function(Value)
+        silhouetteEnabled = Value
+        if Value then
+            for _, player in pairs(Players:GetPlayers()) do
+                if player ~= localPlayer and player.Character then
+                    createEsp(player)
+                end
+            end
+        else
+            for player, objects in pairs(espObjects) do
+                for i = #objects, 1, -1 do
+                    if objects[i]:IsA("Highlight") and objects[i].Name == "ESP_Silhouette" then
+                        objects[i]:Destroy()
+                        table.remove(objects, i)
+                    end
+                end
+                if #objects == 0 then
+                    espObjects[player] = nil
+                end
+            end
+        end
+        updateEsp()
+        saveSettings()
+        notify({
+            Title = "Player ESP Fill",
+            Content = Value and "ENABLED" or "DISABLED",
+            Duration = 2,
+            Icon = "solar:magic-stick-linear"
+        })
+    end,
+})
+
+ui.SilhouetteColorPicker = VisualsTab:Colorpicker({
+    Title = "ESP Fill Color",
+    Default = espSettings.SilhouetteColor,
+    Callback = function(Color)
+        espSettings.SilhouetteColor = Color
+        updateEsp()
+        saveSettings()
+    end,
+})
+
+ui.SilhouetteTransparencySlider = VisualsTab:Slider({
+    Title = "ESP Fill Transparency",
+    Value = {Min = 0, Max = 1, Default = espSettings.SilhouetteTransparency},
+    Step = 0.1,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        espSettings.SilhouetteTransparency = numeric
+        updateEsp()
+        saveSettings()
+    end,
+})
+
+VisualsTab:Section({Title = "Player Names"})
+
+ui.NamesEnabledToggle = VisualsTab:Toggle({
+    Title = "Show Player Names",
+    Value = namesEnabled,
+    Callback = function(Value)
+        namesEnabled = Value
+        if Value then
+            createNameTagsForAll()
+        else
+            clearAllNameTags()
+        end
+        saveSettings()
+        notify({
+            Title = "Player Names",
+            Content = Value and "ENABLED" or "DISABLED",
+            Duration = 2,
+            Icon = "solar:user-id-linear"
+        })
+    end,
+})
+
+ui.ShowDisplayNameToggle = VisualsTab:Toggle({
+    Title = "Show Display Name",
+    Value = espSettings.ShowDisplayName,
+    Callback = function(Value)
+        espSettings.ShowDisplayName = Value
+        if namesEnabled then
+            updateNameTags()
+        end
+        saveSettings()
+    end,
+})
+
+ui.ShowUsernameToggle = VisualsTab:Toggle({
+    Title = "Show Username",
+    Value = espSettings.ShowUsername,
+    Callback = function(Value)
+        espSettings.ShowUsername = Value
+        if namesEnabled then
+            updateNameTags()
+        end
+        saveSettings()
+    end,
+})
+
+ui.TextColorPicker = VisualsTab:Colorpicker({
+    Title = "Text Color",
+    Default = espSettings.TextColor,
+    Callback = function(Color)
+        espSettings.TextColor = Color
+        if namesEnabled then
+            updateNameTags()
+        end
+        saveSettings()
+    end,
+})
+
+ui.OutlineColorPicker = VisualsTab:Colorpicker({
+    Title = "Text Outline Color",
+    Default = espSettings.OutlineColor,
+    Callback = function(Color)
+        espSettings.OutlineColor = Color
+        if namesEnabled then
+            updateNameTags()
+        end
+        saveSettings()
+    end,
+})
+
+ui.TextSizeSlider = VisualsTab:Slider({
+    Title = "Text Size",
+    Desc = "Pixels",
+    Value = {Min = 10, Max = 20, Default = espSettings.TextSize},
+    Step = 1,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        espSettings.TextSize = numeric
+        if namesEnabled then
+            updateNameTags()
+        end
+        saveSettings()
+    end,
+})
+
+VisualsTab:Section({Title = "ESP Management"})
+
+VisualsTab:Button({
+    Title = "Refresh ESP Now",
+    Callback = function()
+        refreshAllEsp()
+        notify({
+            Title = "ESP Refreshed",
+            Content = "ESP has been manually refreshed",
+            Duration = 2,
+            Icon = "solar:refresh-linear"
+        })
+    end,
+})
+
+VisualsTab:Button({
+    Title = "Clear All ESP",
+    Callback = function()
+        for player, _ in pairs(espObjects) do
+            removeEsp(player)
+        end
+        espObjects = {}
+        clearAllNameTags()
+        notify({
+            Title = "ESP Cleared",
+            Content = "All ESP has been cleared",
+            Duration = 2,
+            Icon = "solar:trash-bin-trash-linear"
+        })
+    end,
+})
+
+local SettingsTab = Window:Tab({Title = "Settings", Icon = "solar:settings-linear"})
+SettingsTab:Section({Title = "Menu"})
+
+SettingsTab:Paragraph({
+    Title = "Menu hotkey: K",
+    Desc = "This hotkey is fixed"
+})
+
+SettingsTab:Section({Title = "Hotkey Controls"})
+
+SettingsTab:Button({
+    Title = "Toggle Anti Lag (Y)",
+    Callback = function()
+        toggleAntiLag()
+    end,
+})
+
+SettingsTab:Button({
+    Title = "Toggle Loop Reset (T)",
+    Callback = function()
+        toggleLoopReset()
+    end,
+})
+
+SettingsTab:Section({Title = "Visual Settings"})
+
+ui.RadiusCircleToggle = SettingsTab:Toggle({
+    Title = "Show Radius Circle",
+    Value = SETTINGS.SHOW_RADIUS_CIRCLE,
+    Callback = function(Value)
+        SETTINGS.SHOW_RADIUS_CIRCLE = Value
+        if isAiming and SETTINGS.CROSSHAIR_ENABLED then
+            createCrosshair()
+        end
+        saveSettings()
+    end,
+})
+
+ui.CircleTransparencySlider = SettingsTab:Slider({
+    Title = "Circle Transparency",
+    Value = {Min = 0, Max = 1, Default = SETTINGS.CIRCLE_TRANSPARENCY},
+    Step = 0.1,
+    Callback = function(Value)
+        local numeric = tonumber(Value)
+        if not numeric then
+            return
+        end
+        SETTINGS.CIRCLE_TRANSPARENCY = numeric
+        if isAiming and SETTINGS.CROSSHAIR_ENABLED then
+            createCrosshair()
+        end
+        saveSettings()
+    end,
+})
+
+SettingsTab:Section({Title = "Display Settings"})
+
+ui.ShowPingToggle = SettingsTab:Toggle({
+    Title = "Show Ping",
+    Value = SETTINGS.SHOW_PING,
+    Callback = function(Value)
+        SETTINGS.SHOW_PING = Value
+        saveSettings()
+        createWatermark()
+    end,
+})
+
+ui.ShowFPSToggle = SettingsTab:Toggle({
+    Title = "Show FPS",
+    Value = SETTINGS.SHOW_FPS,
+    Callback = function(Value)
+        SETTINGS.SHOW_FPS = Value
+        saveSettings()
+        createWatermark()
+    end,
+})
+
+SettingsTab:Section({Title = "Management"})
+
+SettingsTab:Button({
+    Title = "Reset to Defaults",
+    Callback = function()
+        SETTINGS = DEFAULT_SETTINGS
+        camera.FieldOfView = SETTINGS.CAMERA_FOV
+        SETTINGS.FOV_ANGLE = SETTINGS.CAMERA_FOV
+        
+        espEnabled = false
+        silhouetteEnabled = false
+        namesEnabled = false
+        espThroughWalls = true
+        maxEspDistance = 1000
+        espUpdateInterval = 1
+        espSettings = {
+            Color = Color3.fromRGB(255, 255, 255),
+            SilhouetteColor = Color3.fromRGB(255, 105, 180),
+            SilhouetteTransparency = 0.5,
+            TextColor = Color3.fromRGB(255, 255, 255),
+            OutlineColor = Color3.fromRGB(0, 0, 0),
+            TextSize = 16,
+            ShowDisplayName = true,
+            ShowUsername = true
+        }
+        
+        for player, _ in pairs(espObjects) do
+            removeEsp(player)
+        end
+        espObjects = {}
+        
+        clearAllNameTags()
+        
+        if ui.AimEnabledToggle then ui.AimEnabledToggle:Set(SETTINGS.AIM_ENABLED, false) end
+        if ui.CrosshairToggle then ui.CrosshairToggle:Set(SETTINGS.CROSSHAIR_ENABLED, false) end
+        if ui.AimRadiusSlider then ui.AimRadiusSlider:Set(SETTINGS.MAX_RADIUS) end
+        if ui.MaxDistanceSlider then ui.MaxDistanceSlider:Set(SETTINGS.MAX_DISTANCE) end
+        if ui.CameraFOVSlider then ui.CameraFOVSlider:Set(SETTINGS.CAMERA_FOV) end
+        if ui.RadiusCircleToggle then ui.RadiusCircleToggle:Set(SETTINGS.SHOW_RADIUS_CIRCLE, false) end
+        if ui.CircleTransparencySlider then ui.CircleTransparencySlider:Set(SETTINGS.CIRCLE_TRANSPARENCY) end
+        if ui.PrioritizeLimbsToggle then ui.PrioritizeLimbsToggle:Set(SETTINGS.PRIORITIZE_LIMBS, false) end
+        if ui.ObstacleCheckToggle then ui.ObstacleCheckToggle:Set(SETTINGS.OBSTACLE_CHECK, false) end
+        if ui.ShowPingToggle then ui.ShowPingToggle:Set(SETTINGS.SHOW_PING, false) end
+        if ui.ShowFPSToggle then ui.ShowFPSToggle:Set(SETTINGS.SHOW_FPS, false) end
+        if ui.AimHeadToggle then ui.AimHeadToggle:Set(SETTINGS.AIM_HEAD, false) end
+        if ui.AimTorsoToggle then ui.AimTorsoToggle:Set(SETTINGS.AIM_TORSO, false) end
+        if ui.AimLeftArmToggle then ui.AimLeftArmToggle:Set(SETTINGS.AIM_LEFT_ARM, false) end
+        if ui.AimRightArmToggle then ui.AimRightArmToggle:Set(SETTINGS.AIM_RIGHT_ARM, false) end
+        if ui.AimLeftLegToggle then ui.AimLeftLegToggle:Set(SETTINGS.AIM_LEFT_LEG, false) end
+        if ui.AimRightLegToggle then ui.AimRightLegToggle:Set(SETTINGS.AIM_RIGHT_LEG, false) end
+        if ui.CrosshairColorPicker then ui.CrosshairColorPicker:Set(Color3.fromRGB(SETTINGS.CROSSHAIR_COLOR_R, SETTINGS.CROSSHAIR_COLOR_G, SETTINGS.CROSSHAIR_COLOR_B)) end
+        if ui.WatermarkColorPicker then ui.WatermarkColorPicker:Set(Color3.fromRGB(SETTINGS.WATERMARK_COLOR_R, SETTINGS.WATERMARK_COLOR_G, SETTINGS.WATERMARK_COLOR_B)) end
+        if ui.RadiusColorPicker then ui.RadiusColorPicker:Set(Color3.fromRGB(SETTINGS.RADIUS_COLOR_R, SETTINGS.RADIUS_COLOR_G, SETTINGS.RADIUS_COLOR_B)) end
+        if ui.EspEnabledToggle then ui.EspEnabledToggle:Set(espEnabled, false) end
+        if ui.EspColorPicker then ui.EspColorPicker:Set(espSettings.Color) end
+        if ui.EspThroughWallsToggle then ui.EspThroughWallsToggle:Set(espThroughWalls, false) end
+        if ui.MaxEspDistanceSlider then ui.MaxEspDistanceSlider:Set(maxEspDistance) end
+        if ui.EspUpdateSlider then ui.EspUpdateSlider:Set(espUpdateInterval) end
+        if ui.SilhouetteEnabledToggle then ui.SilhouetteEnabledToggle:Set(silhouetteEnabled, false) end
+        if ui.SilhouetteColorPicker then ui.SilhouetteColorPicker:Set(espSettings.SilhouetteColor) end
+        if ui.SilhouetteTransparencySlider then ui.SilhouetteTransparencySlider:Set(espSettings.SilhouetteTransparency) end
+        if ui.NamesEnabledToggle then ui.NamesEnabledToggle:Set(namesEnabled, false) end
+        if ui.ShowDisplayNameToggle then ui.ShowDisplayNameToggle:Set(espSettings.ShowDisplayName, false) end
+        if ui.ShowUsernameToggle then ui.ShowUsernameToggle:Set(espSettings.ShowUsername, false) end
+        if ui.TextColorPicker then ui.TextColorPicker:Set(espSettings.TextColor) end
+        if ui.OutlineColorPicker then ui.OutlineColorPicker:Set(espSettings.OutlineColor) end
+        if ui.TextSizeSlider then ui.TextSizeSlider:Set(espSettings.TextSize) end
+        
+        createWatermark()
+        saveSettings()
+        notify({
+            Title = "Settings Reset",
+            Content = "All settings have been reset to defaults",
+            Duration = 3,
+            Icon = "solar:restart-linear"
+        })
+    end,
+})
+
+SettingsTab:Button({
+    Title = "Save Settings",
+    Callback = function()
+        if saveSettings() then
+            notify({
+                Title = "Settings Saved",
+                Content = "Your settings have been saved successfully",
+                Duration = 3,
+                Icon = "solar:diskette-linear"
+            })
+        else
+            notify({
+                Title = "Save Failed",
+                Content = "Failed to save settings",
+                Duration = 3,
+                Icon = "solar:danger-triangle-linear"
+            })
+        end
+    end,
+})
+
+SettingsTab:Button({
+    Title = "Load Settings",
+    Callback = function()
+        local loaded = loadSettings()
+        if loaded then
+            SETTINGS = loaded
+            camera.FieldOfView = SETTINGS.CAMERA_FOV
+            SETTINGS.FOV_ANGLE = SETTINGS.CAMERA_FOV
+            
+            if ui.AimEnabledToggle then ui.AimEnabledToggle:Set(SETTINGS.AIM_ENABLED, false) end
+            if ui.CrosshairToggle then ui.CrosshairToggle:Set(SETTINGS.CROSSHAIR_ENABLED, false) end
+            if ui.AimRadiusSlider then ui.AimRadiusSlider:Set(SETTINGS.MAX_RADIUS) end
+            if ui.MaxDistanceSlider then ui.MaxDistanceSlider:Set(SETTINGS.MAX_DISTANCE) end
+            if ui.CameraFOVSlider then ui.CameraFOVSlider:Set(SETTINGS.CAMERA_FOV) end
+            if ui.RadiusCircleToggle then ui.RadiusCircleToggle:Set(SETTINGS.SHOW_RADIUS_CIRCLE, false) end
+            if ui.CircleTransparencySlider then ui.CircleTransparencySlider:Set(SETTINGS.CIRCLE_TRANSPARENCY) end
+            if ui.PrioritizeLimbsToggle then ui.PrioritizeLimbsToggle:Set(SETTINGS.PRIORITIZE_LIMBS, false) end
+            if ui.ObstacleCheckToggle then ui.ObstacleCheckToggle:Set(SETTINGS.OBSTACLE_CHECK, false) end
+            if ui.ShowPingToggle then ui.ShowPingToggle:Set(SETTINGS.SHOW_PING, false) end
+            if ui.ShowFPSToggle then ui.ShowFPSToggle:Set(SETTINGS.SHOW_FPS, false) end
+            if ui.AimHeadToggle then ui.AimHeadToggle:Set(SETTINGS.AIM_HEAD, false) end
+            if ui.AimTorsoToggle then ui.AimTorsoToggle:Set(SETTINGS.AIM_TORSO, false) end
+            if ui.AimLeftArmToggle then ui.AimLeftArmToggle:Set(SETTINGS.AIM_LEFT_ARM, false) end
+            if ui.AimRightArmToggle then ui.AimRightArmToggle:Set(SETTINGS.AIM_RIGHT_ARM, false) end
+            if ui.AimLeftLegToggle then ui.AimLeftLegToggle:Set(SETTINGS.AIM_LEFT_LEG, false) end
+            if ui.AimRightLegToggle then ui.AimRightLegToggle:Set(SETTINGS.AIM_RIGHT_LEG, false) end
+            if ui.CrosshairColorPicker then ui.CrosshairColorPicker:Set(Color3.fromRGB(SETTINGS.CROSSHAIR_COLOR_R, SETTINGS.CROSSHAIR_COLOR_G, SETTINGS.CROSSHAIR_COLOR_B)) end
+            if ui.WatermarkColorPicker then ui.WatermarkColorPicker:Set(Color3.fromRGB(SETTINGS.WATERMARK_COLOR_R, SETTINGS.WATERMARK_COLOR_G, SETTINGS.WATERMARK_COLOR_B)) end
+            if ui.RadiusColorPicker then ui.RadiusColorPicker:Set(Color3.fromRGB(SETTINGS.RADIUS_COLOR_R, SETTINGS.RADIUS_COLOR_G, SETTINGS.RADIUS_COLOR_B)) end
+            if ui.EspEnabledToggle then ui.EspEnabledToggle:Set(espEnabled, false) end
+            if ui.EspColorPicker then ui.EspColorPicker:Set(espSettings.Color) end
+            if ui.EspThroughWallsToggle then ui.EspThroughWallsToggle:Set(espThroughWalls, false) end
+            if ui.MaxEspDistanceSlider then ui.MaxEspDistanceSlider:Set(maxEspDistance) end
+            if ui.EspUpdateSlider then ui.EspUpdateSlider:Set(espUpdateInterval) end
+            if ui.SilhouetteEnabledToggle then ui.SilhouetteEnabledToggle:Set(silhouetteEnabled, false) end
+            if ui.SilhouetteColorPicker then ui.SilhouetteColorPicker:Set(espSettings.SilhouetteColor) end
+            if ui.SilhouetteTransparencySlider then ui.SilhouetteTransparencySlider:Set(espSettings.SilhouetteTransparency) end
+            if ui.NamesEnabledToggle then ui.NamesEnabledToggle:Set(namesEnabled, false) end
+            if ui.ShowDisplayNameToggle then ui.ShowDisplayNameToggle:Set(espSettings.ShowDisplayName, false) end
+            if ui.ShowUsernameToggle then ui.ShowUsernameToggle:Set(espSettings.ShowUsername, false) end
+            if ui.TextColorPicker then ui.TextColorPicker:Set(espSettings.TextColor) end
+            if ui.OutlineColorPicker then ui.OutlineColorPicker:Set(espSettings.OutlineColor) end
+            if ui.TextSizeSlider then ui.TextSizeSlider:Set(espSettings.TextSize) end
+            
+            createWatermark()
+            startVisualsUpdateLoop()
+            setupNameEspConnections()
+            
+            notify({
+                Title = "Settings Loaded",
+                Content = "Settings have been loaded successfully",
+                Duration = 3,
+                Icon = "solar:folder-open-linear"
+            })
+        else
+            notify({
+                Title = "Load Failed",
+                Content = "Failed to load settings",
+                Duration = 3,
+                Icon = "solar:danger-triangle-linear"
+            })
+        end
+    end,
+})
+
+SettingsTab:Button({
+    Title = "Unload Aimlock",
+    Callback = function()
+        notify({
+            Title = "Unloading",
+            Content = "Aimlock will be unloaded in 3 seconds...",
+            Duration = 3,
+            Icon = "solar:logout-2-linear"
+        })
+        wait(3)
+        
+        for player, _ in pairs(espObjects) do
+            removeEsp(player)
+        end
+        espObjects = {}
+        
+        clearAllNameTags()
+        
+        for _, connection in ipairs(connections) do
+            if connection and typeof(connection) == "RBXScriptConnection" then
+                connection:Disconnect()
+            end
+        end
+        
+        for _, obj in ipairs(createdObjects) do
+            if obj and obj.Parent then
+                obj:Destroy()
+            end
+        end
+        
+        if aimConnection then
+            aimConnection:Disconnect()
+            aimConnection = nil
+        end
+        
+        Window:Destroy()
+        removeWatermark()
+        removeCrosshair()
+        isAiming = false
+        respawnToggle = false
+        antiLagToggle = false
+    end,
+})
+
+local InfoTab = Window:Tab({Title = "Info", Icon = "solar:info-circle-linear"})
+InfoTab:Section({Title = "Instructions"})
+InfoTab:Paragraph({Title = "Hold RMB to activate aimlock"})
+InfoTab:Paragraph({Title = "Targets within the radius will be locked"})
+InfoTab:Paragraph({Title = "Adjust settings for optimal performance"})
+InfoTab:Paragraph({Title = "Y: Toggle Anti Lag"})
+InfoTab:Paragraph({Title = "T: Toggle Loop Reset"})
+
+InfoTab:Section({Title = "Current Settings"})
+
+local pingLabel = InfoTab:Paragraph({Title = "Ping: 0ms"})
+local fpsLabel = InfoTab:Paragraph({Title = "FPS: 0"})
+local antiLagStatus = InfoTab:Paragraph({Title = "Anti Lag: OFF"})
+local loopResetStatus = InfoTab:Paragraph({Title = "Loop Reset: OFF"})
+
+InfoTab:Section({Title = "The Solar Triad | slr"})
+
+InfoTab:Paragraph({
+    Title = "leilahimikat krutoi",
+    Color = Color3.fromRGB(40, 40, 40)
+})
+
+InfoTab:Paragraph({
+    Title = "zig_pdd fascist",
+    Color = Color3.fromRGB(40, 40, 40)
+})
+local infoConnection
+infoConnection = RunService.Heartbeat:Connect(function()
+    local ping = getPing()
+    pingLabel:SetTitle("Ping: " .. ping .. "ms")
+    fpsLabel:SetTitle("FPS: " .. fps)
+    
+    local scriptObj = localPlayer.PlayerScripts:FindFirstChild("CharacterAndBeamMove")
+    if scriptObj then
+        local antiLagDisplayStatus = scriptObj.Enabled and "OFF" or "ON"
+        antiLagStatus:SetTitle("Anti Lag: " .. antiLagDisplayStatus)
+    else
+        antiLagStatus:SetTitle("Anti Lag: NOT FOUND")
+    end
+    
+    loopResetStatus:SetTitle("Loop Reset: " .. (respawnToggle and "ON" or "OFF"))
+    
+    if watermark and watermark.Frame then
+        local pingLabelWidget = watermark.Frame:FindFirstChild("PingLabel")
+        if pingLabelWidget then
+            if ping <= 135 then
+                pingLabelWidget.TextColor3 = Color3.fromRGB(0, 255, 0)
+            elseif ping <= 180 then
+                pingLabelWidget.TextColor3 = Color3.fromRGB(255, 255, 0)
+            else
+                pingLabelWidget.TextColor3 = Color3.fromRGB(255, 50, 50)
+            end
+            pingLabelWidget.Text = "Ping: " .. ping .. "ms"
+        end
+        
+        local fpsLabelWidget = watermark.Frame:FindFirstChild("FPSLabel")
+        if fpsLabelWidget then
+            if fps > 60 then
+                fpsLabelWidget.TextColor3 = Color3.fromRGB(0, 255, 0)
+            elseif fps > 30 then
+                fpsLabelWidget.TextColor3 = Color3.fromRGB(255, 255, 0)
+            else
+                fpsLabelWidget.TextColor3 = Color3.fromRGB(255, 50, 50)
+            end
+            fpsLabelWidget.Text = "FPS: " .. fps
+        end
+    end
+end)
+table.insert(connections, infoConnection)
+
+local inputBeganConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.UserInputType == SETTINGS.AIM_KEY and SETTINGS.AIM_ENABLED then
+        isAiming = true
+        updateWatermarkColor()
+        if SETTINGS.CROSSHAIR_ENABLED then
+            createCrosshair()
+        end
+        aimConnection = RunService.RenderStepped:Connect(function()
+            if isAiming and SETTINGS.AIM_ENABLED then
+                aimAtTarget()
+            end
+        end)
+        table.insert(connections, aimConnection)
+    end
+end)
+table.insert(connections, inputBeganConnection)
+
+local inputEndedConnection = UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if input.UserInputType == SETTINGS.AIM_KEY then
+        isAiming = false
+        updateWatermarkColor()
+        if aimConnection then
+            aimConnection:Disconnect()
+            aimConnection = nil
+        end
+        removeCrosshair()
+    end
+end)
+table.insert(connections, inputEndedConnection)
+
+local hotkeyConnection = setupHotkeys()
+
+createWatermark()
+
+startVisualsUpdateLoop()
+setupNameEspConnections()
+
+notify({
+    Title = "aimlock interface",
+    Content = "Successfully loaded!\nHold RMB to activate aimlock\nY: Toggle Anti Lag\nT: Toggle Loop Reset",
+    Duration = 5,
+    Icon = "solar:target-bold"
+})
