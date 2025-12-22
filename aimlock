@@ -1,0 +1,2577 @@
+local WindUIVersion = "1.6.53"
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/" .. WindUIVersion .. "/main.lua"))()
+if WindUI and WindUI.Icons and WindUI.Icons.SetIconsType then
+    WindUI.Icons:SetIconsType("solar")
+end
+
+local function notify(options)
+    if options.Image and not options.Icon then
+        if typeof(options.Image) == "number" then
+            options.Icon = "rbxassetid://" .. tostring(options.Image)
+        elseif typeof(options.Image) == "string" then
+            options.Icon = options.Image
+        end
+    end
+    options.Image = nil
+    return WindUI:Notify(options)
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+local StatsService = game:GetService("Stats")
+
+local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+local DEFAULT_SETTINGS = {
+    AIMBOT_ENABLED = false,
+    AIMBOT_MODE = "Camera",
+    AIMBOT_FOV = 220,
+    AIMBOT_MAX_DISTANCE = 1200,
+    AIMBOT_SMOOTHNESS = 0.18,
+    AIMBOT_WALLCHECK = true,
+    AIMBOT_TEAMCHECK = true,
+    AIMBOT_PART = "Head",
+    AIMBOT_LINE_ENABLED = true,
+    AIMBOT_LINE_COLOR = Color3.fromRGB(255, 80, 80),
+    AIMBOT_FOV_CIRCLE = true,
+    AIMBOT_FOV_COLOR = Color3.fromRGB(255, 80, 80),
+
+    AIMLOCK_ENABLED = false,
+    AIMLOCK_FOV = 160,
+    AIMLOCK_MAX_DISTANCE = 800,
+    AIMLOCK_SMOOTHNESS = 0.2,
+    AIMLOCK_WALLCHECK = true,
+    AIMLOCK_TEAMCHECK = true,
+    AIMLOCK_R6_PART = "Head",
+    AIMLOCK_R15_PART = "Head",
+    AIMLOCK_RADIUS_VISIBLE = true,
+    AIMLOCK_RADIUS_COLOR = Color3.fromRGB(0, 180, 255),
+
+    TRIGGER_ENABLED = false,
+    TRIGGER_DELAY = 0.06,
+    TRIGGER_HOLD_TIME = 0.05,
+    TRIGGER_MAX_DISTANCE = 650,
+    TRIGGER_WALLCHECK = true,
+    TRIGGER_KEY = "T",
+    TRIGGER_USE_AIMBOT_TARGET = true,
+    TRIGGER_REQUIRE_AIMLOCK = false,
+
+    ANTI_AIM_ENABLED = false,
+    ANTI_AIM_MODE = "Spin",
+    ANTI_AIM_SPIN_SPEED = 220,
+    ANTI_AIM_JITTER = 35,
+    ANTI_AIM_YAW_OFFSET = 0,
+    ANTI_AIM_PITCH_ANGLE = 45,
+    ANTI_AIM_VISUAL = true,
+    ANTI_AIM_LINE_COLOR = Color3.fromRGB(255, 200, 0),
+
+    STRAFE_ENABLED = false,
+    STRAFE_BOOST = 38,
+    STRAFE_SMOOTH = 0.35,
+    STRAFE_MAX_DELTA = 70,
+
+    ESP_ENABLED = false,
+    ESP_BOXES = true,
+    ESP_TRACERS = false,
+    ESP_NAMES = true,
+    ESP_MAX_DISTANCE = 1200,
+    ESP_UPDATE_INTERVAL = 0.01,
+    ESP_THROUGH_WALLS = true,
+    ESP_OUTLINE_ENABLED = true,
+    ESP_OUTLINE_THROUGH_WALLS = true,
+    ESP_BOX_COLOR = Color3.fromRGB(140, 120, 180),
+    ESP_TRACER_COLOR = Color3.fromRGB(175, 155, 215),
+    ESP_TEXT_COLOR = Color3.fromRGB(220, 210, 245),
+    ESP_TEXT_SIZE = 16,
+    ESP_NAME_MODE = "Display",
+    ESP_FRIEND_COLOR = Color3.fromRGB(255, 160, 255),
+    SPAWN_PROTECT_DURATION = 3,
+    SPAWN_TAG_TEXT_SIZE = 14,
+    SPAWN_TAG_COLOR = Color3.fromRGB(80, 160, 255),
+
+    OVERLAY_ENABLED = false,
+    OVERLAY_SHOW_FPS = true,
+    OVERLAY_SHOW_PING = true,
+    OVERLAY_SHOW_AIMBOT_STATE = true,
+    OVERLAY_SHOW_TRIGGER_STATE = true,
+    OVERLAY_SHOW_FAKE_LAG = true,
+
+    FAKE_LAG_INTERVAL = 0.18,
+    FAKE_LAG_CHOKE = 0.08,
+
+    CUSTOM_FOV_ENABLED = false,
+    CAMERA_FOV = 80,
+
+    THIRD_PERSON_ENABLED = false,
+    THIRD_PERSON_DISTANCE = 8,
+    THIRD_PERSON_TRANSPARENCY = 0,
+
+    KILL_SILHOUETTE_ENABLED = false,
+    KILL_SILHOUETTE_COLOR = Color3.fromRGB(255, 100, 100),
+    KILL_SILHOUETTE_TRANSPARENCY = 0.6,
+    KILL_SILHOUETTE_DURATION = 3,
+
+    FRIEND_MODE_ENABLED = false,
+}
+
+local function cloneTable(tbl)
+    local copy = {}
+    for key, value in pairs(tbl) do
+        if type(value) == "table" then
+            copy[key] = cloneTable(value)
+        else
+            copy[key] = value
+        end
+    end
+    return copy
+end
+
+local settings = cloneTable(DEFAULT_SETTINGS)
+
+local CONFIG_ROOT = "RageAimbot"
+local CONFIG_DIR = CONFIG_ROOT .. "/configs"
+local configName = "default"
+
+local connections = {}
+local createdObjects = {}
+local espObjects = {}
+local drawings = {}
+local ui = {}
+local spawnStates = {}
+
+local aimlockHolding = false
+local currentAimbotTarget = nil
+local currentAimlockTarget = nil
+
+local lastTrigger = 0
+local fpsCounter = 0
+local fpsTimer = 0
+local fpsValue = 0
+local overlayVisible = false
+local overlayGui = nil
+local overlayLabel = nil
+local overlayTimer = 0
+local overlayFrame = nil
+
+local antiAimAngle = 0
+local strafeAngle = 0
+local antiAimPitchFlip = false
+local fakeLagHolding = false
+local fakeLagTimer = 0
+
+local defaultFov = camera.FieldOfView
+local defaultCameraMode = localPlayer.CameraMode
+local defaultMinZoom = localPlayer.CameraMinZoomDistance
+local defaultMaxZoom = localPlayer.CameraMaxZoomDistance
+local defaultLocalTransparency = 0
+
+local canDraw = typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
+
+local function addConnection(conn)
+    table.insert(connections, conn)
+    return conn
+end
+
+local function registerDrawing(obj)
+    table.insert(drawings, obj)
+    return obj
+end
+
+local function newDrawing(kind)
+    if not canDraw then
+        return nil
+    end
+    local obj = Drawing.new(kind)
+    obj.Visible = false
+    return registerDrawing(obj)
+end
+
+local function setAimbotEnabled(state, skipUi)
+    local enabled = not not state
+    settings.AIMBOT_ENABLED = enabled
+    if not skipUi and ui and ui.AimbotEnabled then
+        ui.AimbotEnabled:Set(enabled, false)
+    end
+end
+
+local function removeDrawings()
+    for _, obj in ipairs(drawings) do
+        pcall(function()
+            obj:Remove()
+        end)
+    end
+    drawings = {}
+end
+
+local function ensureConfigDir()
+    if makefolder then
+        if not isfolder(CONFIG_ROOT) then
+            makefolder(CONFIG_ROOT)
+        end
+        if not isfolder(CONFIG_DIR) then
+            makefolder(CONFIG_DIR)
+        end
+    end
+end
+
+local function sanitizeConfigName(name)
+    local cleaned = tostring(name or "default")
+    cleaned = cleaned:gsub("[^%w_%-]", "")
+    if cleaned == "" then
+        cleaned = "default"
+    end
+    return cleaned
+end
+
+local function listConfigs()
+    ensureConfigDir()
+    local configs = {}
+    if listfiles then
+        local ok, files = pcall(listfiles, CONFIG_DIR)
+        if ok and type(files) == "table" then
+            for _, path in ipairs(files) do
+                local filename = tostring(path):match("([^/\\]+)$")
+                if filename then
+                    local base = filename:match("(.+)%.json$")
+                    if base then
+                        table.insert(configs, base)
+                    end
+                end
+            end
+        end
+    end
+    if #configs == 0 then
+        table.insert(configs, "default")
+    else
+        table.sort(configs)
+    end
+    return configs
+end
+
+local function serializeSettings()
+    local data = {}
+    for key, value in pairs(settings) do
+        if typeof(value) == "Color3" then
+            data[key] = {
+                __type = "Color3",
+                r = math.floor(value.R * 255),
+                g = math.floor(value.G * 255),
+                b = math.floor(value.B * 255),
+            }
+        else
+            data[key] = value
+        end
+    end
+    return data
+end
+
+local function applyLoadedSettings(data)
+    for key, defaultValue in pairs(DEFAULT_SETTINGS) do
+        local value = data[key]
+        if type(value) == "table" and value.__type == "Color3" then
+            settings[key] = Color3.fromRGB(value.r or 255, value.g or 255, value.b or 255)
+        elseif value ~= nil then
+            settings[key] = value
+        else
+            settings[key] = defaultValue
+        end
+    end
+end
+
+local function saveSettings(name)
+    if not writefile then
+        return false
+    end
+    ensureConfigDir()
+    local path = CONFIG_DIR .. "/" .. sanitizeConfigName(name) .. ".json"
+    local payload = serializeSettings()
+    writefile(path, HttpService:JSONEncode(payload))
+    return true
+end
+
+local function loadSettings(name)
+    if not readfile or not isfile then
+        return false
+    end
+    local path = CONFIG_DIR .. "/" .. sanitizeConfigName(name) .. ".json"
+    if not isfile(path) then
+        return false
+    end
+    local ok, decoded = pcall(function()
+        return HttpService:JSONDecode(readfile(path))
+    end)
+    if not ok or type(decoded) ~= "table" then
+        return false
+    end
+    applyLoadedSettings(decoded)
+    return true
+end
+
+local function getCharacter(player)
+    return player and player.Character or nil
+end
+
+local function getHumanoid(character)
+    if not character then
+        return nil
+    end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function getRoot(character)
+    if not character then
+        return nil
+    end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function isAlive(player)
+    local character = getCharacter(player)
+    local humanoid = getHumanoid(character)
+    local root = getRoot(character)
+    if not humanoid or not root then
+        return false
+    end
+    return humanoid.Health > 0
+end
+
+local function isEnemy(player, doTeamCheck)
+    if not doTeamCheck then
+        if settings.FRIEND_MODE_ENABLED then
+            local ok, isFriend = pcall(function()
+                return player:IsFriendsWith(localPlayer.UserId)
+            end)
+            if ok and isFriend then
+                return false
+            end
+        end
+        return true
+    end
+    if not localPlayer.Team or not player.Team then
+        if settings.FRIEND_MODE_ENABLED then
+            local ok, isFriend = pcall(function()
+                return player:IsFriendsWith(localPlayer.UserId)
+            end)
+            if ok and isFriend then
+                return false
+            end
+        end
+        return true
+    end
+    if settings.FRIEND_MODE_ENABLED then
+        local ok, isFriend = pcall(function()
+            return player:IsFriendsWith(localPlayer.UserId)
+        end)
+        if ok and isFriend then
+            return false
+        end
+    end
+    return localPlayer.Team ~= player.Team
+end
+
+local rayParams = RaycastParams.new()
+rayParams.IgnoreWater = true
+rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+local function isVisible(part, character)
+    if not part or not character then
+        return false
+    end
+    local origin = camera.CFrame.Position
+    local direction = part.Position - origin
+    rayParams.FilterDescendantsInstances = { localPlayer.Character, character }
+    local result = Workspace:Raycast(origin, direction, rayParams)
+    if not result then
+        return true
+    end
+    return result.Instance and result.Instance:IsDescendantOf(character)
+end
+
+local function getAimPart(character, partName)
+    if not character then
+        return nil
+    end
+    if partName then
+        local part = character:FindFirstChild(partName)
+        if part and part:IsA("BasePart") then
+            return part
+        end
+    end
+    local head = character:FindFirstChild("Head")
+    if head and head:IsA("BasePart") then
+        return head
+    end
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") then
+        return root
+    end
+    return nil
+end
+
+local function getScreenDistance(worldPos)
+    local screenPos, onScreen = camera:WorldToViewportPoint(worldPos)
+    if not onScreen then
+        return nil, nil
+    end
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+    return dist, screenPos
+end
+
+local function getClosestTarget(options)
+    local bestTarget = nil
+    local bestScreenDist = math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= localPlayer and isAlive(player) and isEnemy(player, options.teamCheck) then
+            if spawnStates[player] and tick() < spawnStates[player] then
+                continue
+            end
+            local character = player.Character
+            local partName = options.partName
+            if type(partName) == "function" then
+                partName = partName(player, character)
+            end
+            local part = getAimPart(character, partName)
+            if part then
+                local distance = (part.Position - camera.CFrame.Position).Magnitude
+                if distance <= options.maxDistance then
+                    local screenDist, screenPos = getScreenDistance(part.Position)
+                    if screenDist and screenDist <= options.fovRadius and screenDist < bestScreenDist then
+                        if not options.wallCheck or isVisible(part, character) then
+                            bestTarget = {
+                                player = player,
+                                character = character,
+                                part = part,
+                                distance = distance,
+                                screenPos = screenPos,
+                            }
+                            bestScreenDist = screenDist
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return bestTarget
+end
+
+local function isTargetValid(target, options)
+    if not target or not target.player or not target.part then
+        return false
+    end
+    if spawnStates[target.player] and tick() < spawnStates[target.player] then
+        return false
+    end
+    if not isAlive(target.player) then
+        return false
+    end
+    if not isEnemy(target.player, options.teamCheck) then
+        return false
+    end
+    if spawnStates[target.player] and tick() < spawnStates[target.player] then
+        return false
+    end
+    local distance = (target.part.Position - camera.CFrame.Position).Magnitude
+    if distance > options.maxDistance then
+        return false
+    end
+    local screenDist = getScreenDistance(target.part.Position)
+    if not screenDist or screenDist > options.fovRadius then
+        return false
+    end
+    if options.wallCheck and not isVisible(target.part, target.character) then
+        return false
+    end
+    return true
+end
+
+local function getAimlockPartName(player)
+    local character = player and player.Character
+    local humanoid = getHumanoid(character)
+    if humanoid and humanoid.RigType == Enum.HumanoidRigType.R15 then
+        return settings.AIMLOCK_R15_PART
+    end
+    return settings.AIMLOCK_R6_PART
+end
+
+local function getPingString()
+    local ok, value = pcall(function()
+        local net = StatsService:FindFirstChild("Network")
+        local server = net and net:FindFirstChild("ServerStatsItem")
+        local pingItem = server and (server:FindFirstChild("Data Ping") or server:FindFirstChild("Ping") or server:FindFirstChild("Physics"))
+        if pingItem and pingItem.GetValueString then
+            return pingItem:GetValueString()
+        end
+        return nil
+    end)
+    if ok and value then
+        return value
+    end
+    if localPlayer.GetNetworkPing then
+        return string.format("%d ms", math.floor(localPlayer:GetNetworkPing() * 1000))
+    end
+    return "0 ms"
+end
+
+local function createOverlay()
+    if overlayGui then
+        return
+    end
+    local parent = nil
+    if gethui then
+        parent = gethui()
+    elseif game.CoreGui then
+        parent = game.CoreGui
+    else
+        parent = localPlayer:WaitForChild("PlayerGui")
+    end
+
+    overlayGui = Instance.new("ScreenGui")
+    overlayGui.Name = "RageAimbotOverlay"
+    overlayGui.ResetOnSpawn = false
+    overlayGui.IgnoreGuiInset = true
+    overlayGui.Parent = parent
+
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+    frame.BackgroundTransparency = 0.25
+    frame.BorderSizePixel = 0
+    frame.Size = UDim2.new(0, 280, 0, 110)
+    frame.Position = UDim2.new(0, 15, 1, -125)
+    frame.Parent = overlayGui
+    overlayFrame = frame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    overlayLabel = Instance.new("TextLabel")
+    overlayLabel.BackgroundTransparency = 1
+    overlayLabel.TextXAlignment = Enum.TextXAlignment.Left
+    overlayLabel.TextYAlignment = Enum.TextYAlignment.Top
+    overlayLabel.Font = Enum.Font.Code
+    overlayLabel.TextSize = 16
+    overlayLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
+    overlayLabel.Size = UDim2.new(1, -12, 1, -12)
+    overlayLabel.Position = UDim2.new(0, 6, 0, 6)
+    overlayLabel.Text = "RageAimbot"
+    overlayLabel.Parent = frame
+
+    overlayGui.Enabled = false
+end
+
+local function setOverlayVisible(state)
+    overlayVisible = not not state
+    settings.OVERLAY_ENABLED = overlayVisible
+    if overlayGui then
+        overlayGui.Enabled = overlayVisible
+    end
+end
+
+local function updateOverlayText()
+    if not overlayGui or not overlayLabel or not overlayVisible then
+        return
+    end
+    local lines = { "RageAimbot" }
+    if settings.OVERLAY_SHOW_FPS then
+        table.insert(lines, "FPS: " .. tostring(fpsValue))
+    end
+    if settings.OVERLAY_SHOW_PING then
+        table.insert(lines, "Ping: " .. getPingString())
+    end
+    if settings.OVERLAY_SHOW_AIMBOT_STATE then
+        local aimbotState = settings.AIMBOT_ENABLED and "ON" or "OFF"
+        local modeText = settings.AIMBOT_MODE
+        table.insert(lines, "Aimbot: " .. aimbotState .. " (" .. modeText .. ")")
+    end
+    if settings.OVERLAY_SHOW_TRIGGER_STATE then
+        local triggerState = settings.TRIGGER_ENABLED and "ON" or "OFF"
+        table.insert(lines, "Trigger: " .. triggerState)
+    end
+    if settings.OVERLAY_SHOW_FAKE_LAG then
+        table.insert(lines, "FakeLag: " .. (fakeLagHolding and "ON" or "OFF"))
+    end
+    overlayLabel.Text = table.concat(lines, "\n")
+end
+
+local aimbotLine = newDrawing("Line")
+if aimbotLine then
+    aimbotLine.Thickness = 2
+    aimbotLine.Transparency = 1
+end
+
+local aimbotFovCircle = newDrawing("Circle")
+if aimbotFovCircle then
+    aimbotFovCircle.NumSides = 64
+    aimbotFovCircle.Thickness = 1
+    aimbotFovCircle.Transparency = 1
+    aimbotFovCircle.Filled = false
+end
+
+local aimlockCircle = newDrawing("Circle")
+if aimlockCircle then
+    aimlockCircle.NumSides = 64
+    aimlockCircle.Thickness = 1
+    aimlockCircle.Transparency = 1
+    aimlockCircle.Filled = false
+end
+
+local antiAimLine = newDrawing("Line")
+if antiAimLine then
+    antiAimLine.Thickness = 2
+    antiAimLine.Transparency = 1
+end
+
+local function updateFovCircles()
+    if not canDraw then
+        return
+    end
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    if aimbotFovCircle then
+        aimbotFovCircle.Visible = settings.AIMBOT_FOV_CIRCLE and settings.AIMBOT_ENABLED
+        aimbotFovCircle.Position = center
+        aimbotFovCircle.Radius = settings.AIMBOT_FOV
+        aimbotFovCircle.Color = settings.AIMBOT_FOV_COLOR
+    end
+    if aimlockCircle then
+        aimlockCircle.Visible = settings.AIMLOCK_RADIUS_VISIBLE and settings.AIMLOCK_ENABLED
+        aimlockCircle.Position = center
+        aimlockCircle.Radius = settings.AIMLOCK_FOV
+        aimlockCircle.Color = settings.AIMLOCK_RADIUS_COLOR
+    end
+end
+
+local function updateAimbotLine()
+    if not canDraw or not aimbotLine then
+        return
+    end
+    if not settings.AIMBOT_LINE_ENABLED or not currentAimbotTarget then
+        aimbotLine.Visible = false
+        return
+    end
+    local _, screenPos = getScreenDistance(currentAimbotTarget.part.Position)
+    if not screenPos then
+        aimbotLine.Visible = false
+        return
+    end
+    aimbotLine.Visible = true
+    aimbotLine.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    aimbotLine.To = Vector2.new(screenPos.X, screenPos.Y)
+    aimbotLine.Color = settings.AIMBOT_LINE_COLOR
+end
+
+local function updateAntiAimVisual()
+    if not canDraw or not antiAimLine then
+        return
+    end
+    local character = localPlayer.Character
+    local root = getRoot(character)
+    if not settings.ANTI_AIM_VISUAL or not settings.ANTI_AIM_ENABLED or not root then
+        antiAimLine.Visible = false
+        return
+    end
+    local startPos, onScreen = camera:WorldToViewportPoint(root.Position)
+    local endWorld = root.Position + (root.CFrame.LookVector * 6)
+    local endPos, onScreen2 = camera:WorldToViewportPoint(endWorld)
+    if not onScreen or not onScreen2 then
+        antiAimLine.Visible = false
+        return
+    end
+    antiAimLine.Visible = true
+    antiAimLine.From = Vector2.new(startPos.X, startPos.Y)
+    antiAimLine.To = Vector2.new(endPos.X, endPos.Y)
+    antiAimLine.Color = settings.ANTI_AIM_LINE_COLOR
+end
+
+local function getNameText(player)
+    if settings.ESP_NAME_MODE == "Username" then
+        return player.Name
+    end
+    if settings.ESP_NAME_MODE == "Both" then
+        return player.DisplayName .. " (" .. player.Name .. ")"
+    end
+    return player.DisplayName
+end
+
+local function removeEsp(player)
+    local entry = espObjects[player]
+    if not entry then
+        return
+    end
+    if entry.outline and entry.outline.Parent then
+        pcall(function()
+            entry.outline.Enabled = false
+            entry.outline:Destroy()
+        end)
+    end
+    for key, obj in pairs(entry) do
+        if key ~= "outline" then
+            pcall(function()
+                obj.Visible = false
+                obj:Remove()
+            end)
+        end
+    end
+    espObjects[player] = nil
+    spawnStates[player] = nil
+end
+
+local function createEsp(player)
+    if not canDraw then
+        return nil
+    end
+    local box = registerDrawing(Drawing.new("Square"))
+    box.Filled = false
+    box.Thickness = 2
+    box.Transparency = 1
+    box.Visible = false
+
+    local tracer = registerDrawing(Drawing.new("Line"))
+    tracer.Thickness = 1
+    tracer.Transparency = 1
+    tracer.Visible = false
+
+    local text = registerDrawing(Drawing.new("Text"))
+    text.Center = true
+    text.Outline = true
+    text.Visible = false
+
+    local spawnTag = registerDrawing(Drawing.new("Text"))
+    spawnTag.Center = false
+    spawnTag.Outline = true
+    spawnTag.Visible = false
+
+    espObjects[player] = {
+        box = box,
+        tracer = tracer,
+        text = text,
+        spawnTag = spawnTag,
+        outline = nil,
+    }
+    return espObjects[player]
+end
+
+local function updateEspForPlayer(player)
+    if not settings.ESP_ENABLED then
+        removeEsp(player)
+        return
+    end
+    if player == localPlayer then
+        removeEsp(player)
+        return
+    end
+    if not isAlive(player) then
+        removeEsp(player)
+        return
+    end
+    local character = player.Character
+    local root = getRoot(character)
+    local head = character and character:FindFirstChild("Head")
+    if not root or not head then
+        removeEsp(player)
+        return
+    end
+    local distance = (root.Position - camera.CFrame.Position).Magnitude
+    if distance > settings.ESP_MAX_DISTANCE then
+        removeEsp(player)
+        return
+    end
+    if not settings.ESP_THROUGH_WALLS and not isVisible(root, character) then
+        removeEsp(player)
+        return
+    end
+    local isFriend = false
+    if settings.FRIEND_MODE_ENABLED then
+        local ok, friendCheck = pcall(function()
+            return player:IsFriendsWith(localPlayer.UserId)
+        end)
+        if ok and friendCheck then
+            isFriend = true
+        end
+    end
+    local entry = espObjects[player] or createEsp(player)
+    if not entry then
+        return
+    end
+    local useColor = isFriend and settings.ESP_FRIEND_COLOR or settings.ESP_BOX_COLOR
+    local useTracerColor = isFriend and settings.ESP_FRIEND_COLOR or settings.ESP_TRACER_COLOR
+    local useTextColor = isFriend and settings.ESP_FRIEND_COLOR or settings.ESP_TEXT_COLOR
+    local spawnProtected = spawnStates[player] and tick() < spawnStates[player]
+    if spawnProtected then
+        useColor = settings.SPAWN_TAG_COLOR
+        useTracerColor = settings.SPAWN_TAG_COLOR
+        useTextColor = settings.SPAWN_TAG_COLOR
+    end
+    local boundingCFrame, boundingSize = character:GetBoundingBox()
+    local points = {}
+    if boundingCFrame and boundingSize then
+        local extents = boundingSize / 2
+        local offsets = {
+            Vector3.new(-extents.X, -extents.Y, -extents.Z),
+            Vector3.new(extents.X, -extents.Y, -extents.Z),
+            Vector3.new(-extents.X, extents.Y, -extents.Z),
+            Vector3.new(extents.X, extents.Y, -extents.Z),
+            Vector3.new(-extents.X, -extents.Y, extents.Z),
+            Vector3.new(extents.X, -extents.Y, extents.Z),
+            Vector3.new(-extents.X, extents.Y, extents.Z),
+            Vector3.new(extents.X, extents.Y, extents.Z),
+        }
+        for _, offset in ipairs(offsets) do
+            local worldPos = boundingCFrame:PointToWorldSpace(offset)
+            local screenPos, onScreen = camera:WorldToViewportPoint(worldPos)
+            if onScreen then
+                table.insert(points, Vector2.new(screenPos.X, screenPos.Y))
+            end
+        end
+    end
+
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    for _, p in ipairs(points) do
+        minX = math.min(minX, p.X)
+        minY = math.min(minY, p.Y)
+        maxX = math.max(maxX, p.X)
+        maxY = math.max(maxY, p.Y)
+    end
+    local hasBounds = #points > 0 and maxX > minX and maxY > minY
+    local rootPos, onScreen = camera:WorldToViewportPoint(root.Position)
+    local headPos = camera:WorldToViewportPoint(head.Position + Vector3.new(0, head.Size.Y, 0))
+    if not onScreen then
+        entry.box.Visible = false
+        entry.tracer.Visible = false
+        entry.text.Visible = false
+        if entry.outline then
+            entry.outline.Enabled = false
+        end
+        return
+    end
+    local boxPos, boxSize
+    if hasBounds then
+        boxPos = Vector2.new(minX, minY)
+        boxSize = Vector2.new(maxX - minX, maxY - minY)
+    else
+        local legPos = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+        local height = math.abs(headPos.Y - legPos.Y)
+        local width = height * 0.45
+        boxPos = Vector2.new(rootPos.X - width / 2, headPos.Y)
+        boxSize = Vector2.new(width, height)
+    end
+
+    if settings.ESP_BOXES then
+        entry.box.Visible = true
+        entry.box.Color = useColor
+        entry.box.Thickness = 2
+        entry.box.Size = boxSize
+        entry.box.Position = boxPos
+    else
+        entry.box.Visible = false
+    end
+
+    if settings.ESP_TRACERS then
+        entry.tracer.Visible = true
+        entry.tracer.Color = useTracerColor
+        entry.tracer.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+        entry.tracer.To = Vector2.new(rootPos.X, rootPos.Y)
+    else
+        entry.tracer.Visible = false
+    end
+
+    if settings.ESP_NAMES then
+        entry.text.Visible = true
+        entry.text.Color = useTextColor
+        entry.text.Size = settings.ESP_TEXT_SIZE
+        entry.text.Text = getNameText(player)
+        entry.text.Position = Vector2.new(rootPos.X, headPos.Y - 16)
+    else
+        entry.text.Visible = false
+    end
+
+    if entry.spawnTag then
+        if spawnProtected then
+            entry.spawnTag.Visible = true
+            entry.spawnTag.Color = settings.SPAWN_TAG_COLOR
+            entry.spawnTag.Size = settings.SPAWN_TAG_TEXT_SIZE
+            entry.spawnTag.Text = "SPAWN\nSHIELD"
+            entry.spawnTag.Position = Vector2.new(boxPos.X + boxSize.X + 6, boxPos.Y)
+        else
+            entry.spawnTag.Visible = false
+        end
+    end
+
+    -- outline via Highlight instance
+    if settings.ESP_OUTLINE_ENABLED then
+        if not entry.outline or not entry.outline.Parent then
+            local hl = Instance.new("Highlight")
+            hl.FillTransparency = 1
+            hl.OutlineTransparency = 0
+            hl.Name = "RageAimbotOutline"
+            hl.Parent = character
+            entry.outline = hl
+        end
+        entry.outline.Enabled = true
+        entry.outline.Adornee = character
+        entry.outline.OutlineColor = useColor
+        entry.outline.DepthMode = settings.ESP_OUTLINE_THROUGH_WALLS
+            and Enum.HighlightDepthMode.AlwaysOnTop
+            or Enum.HighlightDepthMode.Occluded
+    elseif entry.outline then
+        entry.outline.Enabled = false
+    end
+end
+
+local function updateEsp()
+    local alivePlayers = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        alivePlayers[player] = true
+        updateEspForPlayer(player)
+    end
+    for player in pairs(espObjects) do
+        if not alivePlayers[player] then
+            removeEsp(player)
+        end
+    end
+end
+
+local function clearEsp()
+    for player, _ in pairs(espObjects) do
+        removeEsp(player)
+    end
+    espObjects = {}
+end
+
+local function showSilhouette(character)
+    if not settings.KILL_SILHOUETTE_ENABLED then
+        return
+    end
+    local clone = character:Clone()
+    clone.Name = "Silhouette"
+    for _, descendant in ipairs(clone:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            descendant.Anchored = true
+            descendant.CanCollide = false
+            descendant.Transparency = 1
+        elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+            descendant:Destroy()
+        elseif descendant:IsA("Humanoid") or descendant:IsA("Script") or descendant:IsA("LocalScript") then
+            descendant:Destroy()
+        end
+    end
+    clone.Parent = Workspace
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = settings.KILL_SILHOUETTE_COLOR
+    highlight.FillTransparency = settings.KILL_SILHOUETTE_TRANSPARENCY
+    highlight.OutlineTransparency = 1
+    highlight.Adornee = clone
+    highlight.Parent = clone
+
+    table.insert(createdObjects, clone)
+
+    task.delay(settings.KILL_SILHOUETTE_DURATION, function()
+        if clone and clone.Parent then
+            clone:Destroy()
+        end
+    end)
+end
+
+local function setupCharacter(player, character)
+    spawnStates[player] = tick() + (settings.SPAWN_PROTECT_DURATION or 3)
+    local humanoid = getHumanoid(character)
+    if not humanoid then
+        return
+    end
+    addConnection(humanoid.Died:Connect(function()
+        removeEsp(player)
+        if not settings.KILL_SILHOUETTE_ENABLED then
+            return
+        end
+        local creator = humanoid:FindFirstChild("creator")
+        if creator and creator.Value and creator.Value ~= localPlayer then
+            return
+        end
+        showSilhouette(character)
+    end))
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+    if player.Character then
+        setupCharacter(player, player.Character)
+    end
+    addConnection(player.CharacterRemoving:Connect(function()
+        removeEsp(player)
+    end))
+    addConnection(player.CharacterAdded:Connect(function(character)
+        setupCharacter(player, character)
+    end))
+end
+
+addConnection(Players.PlayerAdded:Connect(function(player)
+    addConnection(player.CharacterRemoving:Connect(function()
+        removeEsp(player)
+    end))
+    addConnection(player.CharacterAdded:Connect(function(character)
+        setupCharacter(player, character)
+    end))
+end))
+
+addConnection(Players.PlayerRemoving:Connect(function(player)
+    removeEsp(player)
+end))
+
+local function updateAimbot()
+    if not settings.AIMBOT_ENABLED then
+        currentAimbotTarget = nil
+        return
+    end
+    local target = getClosestTarget({
+        fovRadius = settings.AIMBOT_FOV,
+        maxDistance = settings.AIMBOT_MAX_DISTANCE,
+        wallCheck = settings.AIMBOT_WALLCHECK,
+        teamCheck = settings.AIMBOT_TEAMCHECK,
+        partName = settings.AIMBOT_PART,
+    })
+    currentAimbotTarget = target
+    if settings.AIMBOT_MODE == "Camera" and target and not (settings.AIMLOCK_ENABLED and aimlockHolding) then
+        local desired = CFrame.new(camera.CFrame.Position, target.part.Position)
+        local smooth = math.clamp(settings.AIMBOT_SMOOTHNESS, 0, 1)
+        if smooth <= 0 then
+            camera.CFrame = desired
+        else
+            camera.CFrame = camera.CFrame:Lerp(desired, smooth)
+        end
+    elseif settings.AIMBOT_MODE == "Silent" and target then
+        local character = localPlayer.Character
+        local root = getRoot(character)
+        local humanoid = getHumanoid(character)
+        if humanoid then
+            humanoid.AutoRotate = false
+        end
+        if root then
+            root.CFrame = CFrame.lookAt(root.Position, target.part.Position)
+        end
+    end
+end
+
+local function updateAimlock()
+    if not settings.AIMLOCK_ENABLED or not aimlockHolding then
+        currentAimlockTarget = nil
+        return
+    end
+    local options = {
+        fovRadius = settings.AIMLOCK_FOV,
+        maxDistance = settings.AIMLOCK_MAX_DISTANCE,
+        wallCheck = settings.AIMLOCK_WALLCHECK,
+        teamCheck = settings.AIMLOCK_TEAMCHECK,
+        partName = function(targetPlayer)
+            return getAimlockPartName(targetPlayer)
+        end,
+    }
+    if not isTargetValid(currentAimlockTarget, options) then
+        currentAimlockTarget = getClosestTarget(options)
+    end
+    if currentAimlockTarget and currentAimlockTarget.part then
+        local desired = CFrame.new(camera.CFrame.Position, currentAimlockTarget.part.Position)
+        local smooth = math.clamp(settings.AIMLOCK_SMOOTHNESS, 0, 1)
+        if smooth <= 0 then
+            camera.CFrame = desired
+        else
+            camera.CFrame = camera.CFrame:Lerp(desired, smooth)
+        end
+    end
+end
+
+local function fireTrigger()
+    if mouse1press and mouse1release then
+        mouse1press()
+        task.wait(settings.TRIGGER_HOLD_TIME)
+        mouse1release()
+        return
+    end
+    -- no mouse functions available; abort trigger to avoid kicks
+end
+
+local function updateTriggerbot()
+    if not settings.TRIGGER_ENABLED then
+        return
+    end
+    local function isSpawnProtectedPlayer(plr)
+        return spawnStates[plr] and tick() < spawnStates[plr]
+    end
+    if settings.TRIGGER_REQUIRE_AIMLOCK and not aimlockHolding then
+        return
+    end
+    if tick() - lastTrigger < settings.TRIGGER_DELAY then
+        return
+    end
+    if settings.TRIGGER_USE_AIMBOT_TARGET and settings.AIMBOT_MODE == "Silent" then
+        local target = currentAimbotTarget
+        local function validSilent(t)
+            if not t or not t.part or not t.player then
+                return false
+            end
+            if isSpawnProtectedPlayer(t.player) then
+                return false
+            end
+            if not isAlive(t.player) then
+                return false
+            end
+            if not isEnemy(t.player, settings.AIMBOT_TEAMCHECK) then
+                return false
+            end
+            local dist = (t.part.Position - camera.CFrame.Position).Magnitude
+            if dist > settings.TRIGGER_MAX_DISTANCE then
+                return false
+            end
+            if settings.TRIGGER_WALLCHECK and not isVisible(t.part, t.character) then
+                return false
+            end
+            return true
+        end
+        if not validSilent(target) then
+            target = getClosestTarget({
+                fovRadius = settings.AIMBOT_FOV,
+                maxDistance = settings.TRIGGER_MAX_DISTANCE,
+                wallCheck = settings.TRIGGER_WALLCHECK,
+                teamCheck = settings.AIMBOT_TEAMCHECK,
+                partName = settings.AIMBOT_PART,
+            })
+            currentAimbotTarget = target
+        end
+        if not validSilent(target) then
+            return
+        end
+        -- ensure silent hook uses this target when firing
+        currentAimbotTarget = target
+        local originalCFrame = camera.CFrame
+        camera.CFrame = CFrame.new(originalCFrame.Position, target.part.Position)
+        lastTrigger = tick()
+        fireTrigger()
+        camera.CFrame = originalCFrame
+        return
+    end
+    local center = camera.ViewportSize / 2
+    local ray = camera:ViewportPointToRay(center.X, center.Y)
+    rayParams.FilterDescendantsInstances = { localPlayer.Character }
+    local result = Workspace:Raycast(ray.Origin, ray.Direction * settings.TRIGGER_MAX_DISTANCE, rayParams)
+    if not result or not result.Instance then
+        return
+    end
+    local character = result.Instance:FindFirstAncestorOfClass("Model")
+    local player = character and Players:GetPlayerFromCharacter(character)
+    if not player or player == localPlayer then
+        return
+    end
+    if not isEnemy(player, settings.AIMBOT_TEAMCHECK) then
+        return
+    end
+    if isSpawnProtectedPlayer(player) then
+        return
+    end
+    if settings.TRIGGER_WALLCHECK and not isVisible(result.Instance, character) then
+        return
+    end
+    lastTrigger = tick()
+    fireTrigger()
+end
+
+local function updateAntiAim(dt)
+    if not settings.ANTI_AIM_ENABLED then
+        local humanoid = getHumanoid(localPlayer.Character)
+        if humanoid then
+            humanoid.AutoRotate = true
+        end
+        return
+    end
+    local character = localPlayer.Character
+    local humanoid = getHumanoid(character)
+    local root = getRoot(character)
+    if not humanoid or not root then
+        return
+    end
+    humanoid.AutoRotate = false
+    local yawRad = math.rad(settings.ANTI_AIM_YAW_OFFSET)
+    if settings.ANTI_AIM_MODE == "Spin" then
+        antiAimAngle = antiAimAngle + math.rad(settings.ANTI_AIM_SPIN_SPEED) * dt
+        yawRad = yawRad + antiAimAngle
+    elseif settings.ANTI_AIM_MODE == "Jitter" then
+        local jitter = math.rad(math.random(-settings.ANTI_AIM_JITTER, settings.ANTI_AIM_JITTER))
+        yawRad = yawRad + jitter
+    elseif settings.ANTI_AIM_MODE == "Pitch" then
+        antiAimPitchFlip = not antiAimPitchFlip
+        local pitchRad = math.rad(settings.ANTI_AIM_PITCH_ANGLE or 45) * (antiAimPitchFlip and 1 or -1)
+        root.CFrame = CFrame.new(root.Position) * CFrame.Angles(pitchRad, yawRad, 0)
+        return
+    end
+    root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, yawRad, 0)
+end
+
+local function updateStrafe(dt)
+    if not settings.STRAFE_ENABLED then
+        return
+    end
+    local character = localPlayer.Character
+    local root = getRoot(character)
+    local humanoid = getHumanoid(character)
+    if not root or not humanoid then
+        return
+    end
+    if humanoid.FloorMaterial ~= Enum.Material.Air then
+        return
+    end
+    local moveDir = humanoid.MoveDirection
+    if moveDir.Magnitude < 0.1 then
+        return
+    end
+    local horizontal = moveDir.Unit * settings.STRAFE_BOOST
+    local currentVelocity = root.AssemblyLinearVelocity
+    local targetVelocity = Vector3.new(horizontal.X, currentVelocity.Y, horizontal.Z)
+    local delta = targetVelocity - currentVelocity
+    local maxDelta = settings.STRAFE_MAX_DELTA or (settings.STRAFE_BOOST * 1.5)
+    local planarDelta = Vector3.new(delta.X, 0, delta.Z)
+    local planarMag = planarDelta.Magnitude
+    if planarMag > maxDelta then
+        planarDelta = planarDelta.Unit * maxDelta
+    end
+    local alpha = math.clamp((settings.STRAFE_SMOOTH or 0.35) * dt * 60, 0, 1)
+    local newPlanar = Vector3.new(
+        currentVelocity.X + planarDelta.X * alpha,
+        currentVelocity.Y,
+        currentVelocity.Z + planarDelta.Z * alpha
+    )
+    root.AssemblyLinearVelocity = newPlanar
+end
+
+local function setCharacterTransparency(amount)
+    local character = localPlayer.Character
+    if not character then
+        return
+    end
+    for _, descendant in ipairs(character:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            descendant.LocalTransparencyModifier = amount
+        end
+    end
+end
+
+local function applyCameraSettings()
+    if settings.CUSTOM_FOV_ENABLED then
+        camera.FieldOfView = settings.CAMERA_FOV
+    else
+        camera.FieldOfView = defaultFov
+    end
+    if settings.THIRD_PERSON_ENABLED then
+        localPlayer.CameraMode = Enum.CameraMode.Classic
+        localPlayer.CameraMinZoomDistance = settings.THIRD_PERSON_DISTANCE
+        localPlayer.CameraMaxZoomDistance = settings.THIRD_PERSON_DISTANCE
+        setCharacterTransparency(math.clamp(settings.THIRD_PERSON_TRANSPARENCY or 0, 0, 1))
+    else
+        localPlayer.CameraMode = defaultCameraMode
+        localPlayer.CameraMinZoomDistance = defaultMinZoom
+        localPlayer.CameraMaxZoomDistance = defaultMaxZoom
+        setCharacterTransparency(defaultLocalTransparency)
+    end
+end
+
+local function resetSettings()
+    settings = cloneTable(DEFAULT_SETTINGS)
+end
+
+local silentHooked = false
+local function setupSilentHook()
+    if silentHooked then
+        return
+    end
+    if not hookmetamethod or not getnamecallmethod or not checkcaller then
+        return
+    end
+    silentHooked = true
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        local args = { ... }
+        if not checkcaller()
+            and settings.AIMBOT_ENABLED
+            and settings.AIMBOT_MODE == "Silent"
+            and currentAimbotTarget
+            and currentAimbotTarget.part then
+            if method == "Raycast" and self == Workspace then
+                local origin = args[1]
+                local direction = args[2]
+                if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" then
+                    local targetPos = currentAimbotTarget.part.Position
+                    args[2] = (targetPos - origin).Unit * direction.Magnitude
+                    return oldNamecall(self, unpack(args))
+                end
+            elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+                local ray = args[1]
+                if typeof(ray) == "Ray" then
+                    local origin = ray.Origin
+                    local direction = ray.Direction
+                    local targetPos = currentAimbotTarget.part.Position
+                    args[1] = Ray.new(origin, (targetPos - origin).Unit * direction.Magnitude)
+                    return oldNamecall(self, unpack(args))
+                end
+            end
+        end
+        return oldNamecall(self, ...)
+    end)
+end
+
+setupSilentHook()
+createOverlay()
+setOverlayVisible(settings.OVERLAY_ENABLED)
+
+addConnection(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aimlockHolding = true
+    end
+    if input.KeyCode == Enum.KeyCode.RightAlt then
+        fakeLagHolding = true
+    end
+    if input.KeyCode == Enum.KeyCode.F3 then
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+            setOverlayVisible(not overlayVisible)
+        end
+    end
+end))
+
+addConnection(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aimlockHolding = false
+    end
+    if input.KeyCode == Enum.KeyCode.RightAlt then
+        fakeLagHolding = false
+    end
+end))
+
+addConnection(RunService.RenderStepped:Connect(function(dt)
+    fpsCounter = fpsCounter + 1
+    fpsTimer = fpsTimer + dt
+    if fpsTimer >= 1 then
+        fpsValue = fpsCounter
+        fpsCounter = 0
+        fpsTimer = 0
+    end
+
+    applyCameraSettings()
+    updateAimbot()
+    updateAimlock()
+    updateTriggerbot()
+    updateFovCircles()
+    updateAimbotLine()
+    updateAntiAimVisual()
+
+    overlayTimer = overlayTimer + dt
+    if overlayTimer >= 0.25 then
+        updateOverlayText()
+        overlayTimer = 0
+    end
+
+    if settings.ESP_ENABLED then
+        if not settings.ESP_UPDATE_INTERVAL or settings.ESP_UPDATE_INTERVAL <= 0 then
+            updateEsp()
+        else
+            if not settings._espTick then
+                settings._espTick = 0
+            end
+            settings._espTick = settings._espTick + dt
+            if settings._espTick >= settings.ESP_UPDATE_INTERVAL then
+                updateEsp()
+                settings._espTick = 0
+            end
+        end
+    else
+        clearEsp()
+    end
+end))
+
+addConnection(RunService.Heartbeat:Connect(function(dt)
+    updateAntiAim(dt)
+    updateStrafe(dt)
+
+    if fakeLagHolding then
+        fakeLagTimer = fakeLagTimer + dt
+        if fakeLagTimer >= (settings.FAKE_LAG_INTERVAL or 0.18) then
+            local choke = math.max(0, settings.FAKE_LAG_CHOKE or 0.08)
+            if choke > 0 then
+                task.wait(choke)
+            end
+            fakeLagTimer = 0
+        end
+    else
+        fakeLagTimer = 0
+    end
+end))
+
+local Window = WindUI:CreateWindow({
+    Title = "RageAimbot",
+    Author = "by slrNova",
+    Icon = "solar:target-linear",
+    IconThemed = true,
+    Folder = "RageAimbot",
+    Size = UDim2.new(0, 760, 0, 590),
+    Transparent = true,
+    Acrylic = true,
+    SideBarWidth = 230,
+    ScrollBarEnabled = false,
+    Theme = "Dark",
+    NewElements = true,
+})
+
+Window:SetToggleKey(Enum.KeyCode.K)
+if Window.SetFont then
+    pcall(function()
+        Window:SetFont(Enum.Font.Code)
+    end)
+end
+
+Window:OnClose(function()
+    notify({
+        Title = "Menu",
+        Content = "Menu toggled with K",
+        Duration = 2,
+        Icon = "solar:info-circle-linear",
+    })
+end)
+
+local function refreshConfigDropdown()
+    local configs = listConfigs()
+    if ui.ConfigDropdown then
+        if ui.ConfigDropdown.Update then
+            ui.ConfigDropdown:Update(configs)
+        elseif ui.ConfigDropdown.SetValues then
+            ui.ConfigDropdown:SetValues(configs)
+        elseif ui.ConfigDropdown.Refresh then
+            ui.ConfigDropdown:Refresh(configs)
+        else
+            ui.ConfigDropdown.Values = configs
+        end
+    end
+    return configs
+end
+
+local GlobalTab = Window:Tab({ Title = "Global", Icon = "solar:users-group-two-rounded-linear" })
+GlobalTab:Section({ Title = "Friends" })
+
+ui.FriendMode = GlobalTab:Toggle({
+    Title = "Friend Mode (ignore friends)",
+    Value = settings.FRIEND_MODE_ENABLED,
+    Callback = function(value)
+        settings.FRIEND_MODE_ENABLED = value
+    end,
+})
+
+GlobalTab:Section({ Title = "Overlay Quick Controls" })
+
+ui.ToggleOverlayQuick = GlobalTab:Button({
+    Title = "Toggle Stats Window",
+    Callback = function()
+        setOverlayVisible(not overlayVisible)
+        notify({
+            Title = "Overlay",
+            Content = overlayVisible and "Stats window enabled" or "Stats window hidden",
+            Duration = 2,
+            Icon = overlayVisible and "solar:eye-bold" or "solar:eye-closed-bold",
+        })
+    end,
+})
+
+ui.OverlayShowFpsQuick = GlobalTab:Toggle({
+    Title = "Show FPS",
+    Value = settings.OVERLAY_SHOW_FPS,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_FPS = value
+        if ui.OverlayShowFps then
+            ui.OverlayShowFps:Set(value, false)
+        end
+    end,
+})
+
+ui.OverlayShowPingQuick = GlobalTab:Toggle({
+    Title = "Show Ping",
+    Value = settings.OVERLAY_SHOW_PING,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_PING = value
+        if ui.OverlayShowPing then
+            ui.OverlayShowPing:Set(value, false)
+        end
+    end,
+})
+
+ui.OverlayShowAimbotQuick = GlobalTab:Toggle({
+    Title = "Show Aimbot State",
+    Value = settings.OVERLAY_SHOW_AIMBOT_STATE,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_AIMBOT_STATE = value
+        if ui.OverlayShowAimbot then
+            ui.OverlayShowAimbot:Set(value, false)
+        end
+    end,
+})
+
+ui.OverlayShowTriggerQuick = GlobalTab:Toggle({
+    Title = "Show Trigger State",
+    Value = settings.OVERLAY_SHOW_TRIGGER_STATE,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_TRIGGER_STATE = value
+        if ui.OverlayShowTrigger then
+            ui.OverlayShowTrigger:Set(value, false)
+        end
+    end,
+})
+
+ui.OverlayShowFakeLagQuick = GlobalTab:Toggle({
+    Title = "Show Fake Lag State",
+    Value = settings.OVERLAY_SHOW_FAKE_LAG,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_FAKE_LAG = value
+        if ui.OverlayShowFakeLag then
+            ui.OverlayShowFakeLag:Set(value, false)
+        end
+    end,
+})
+
+local CombatTab = Window:Tab({ Title = "Combat", Icon = "solar:target-linear" })
+CombatTab:Section({ Title = "Aimbot" })
+
+ui.AimbotEnabled = CombatTab:Toggle({
+    Title = "Enable Aimbot",
+    Value = settings.AIMBOT_ENABLED,
+    Callback = function(value)
+        setAimbotEnabled(value, true)
+    end,
+})
+
+ui.AimbotMode = CombatTab:Dropdown({
+    Title = "Aimbot Mode",
+    Values = { "Camera", "Silent" },
+    Value = settings.AIMBOT_MODE,
+    Callback = function(value)
+        settings.AIMBOT_MODE = value
+    end,
+})
+
+ui.AimbotPart = CombatTab:Dropdown({
+    Title = "Aimbot Target Part",
+    Values = { "Head", "UpperTorso", "HumanoidRootPart", "LowerTorso" },
+    Value = settings.AIMBOT_PART,
+    Callback = function(value)
+        settings.AIMBOT_PART = value
+    end,
+})
+
+ui.AimbotFov = CombatTab:Slider({
+    Title = "Aimbot FOV",
+    Desc = "Pixels",
+    Value = { Min = 50, Max = 600, Default = settings.AIMBOT_FOV },
+    Step = 5,
+    Callback = function(value)
+        settings.AIMBOT_FOV = tonumber(value) or settings.AIMBOT_FOV
+    end,
+})
+
+ui.AimbotDistance = CombatTab:Slider({
+    Title = "Aimbot Max Distance",
+    Desc = "Studs",
+    Value = { Min = 50, Max = 3000, Default = settings.AIMBOT_MAX_DISTANCE },
+    Step = 10,
+    Callback = function(value)
+        settings.AIMBOT_MAX_DISTANCE = tonumber(value) or settings.AIMBOT_MAX_DISTANCE
+    end,
+})
+
+ui.AimbotSmooth = CombatTab:Slider({
+    Title = "Aimbot Smoothness",
+    Desc = "0-1",
+    Value = { Min = 0, Max = 1, Default = settings.AIMBOT_SMOOTHNESS },
+    Step = 0.01,
+    Callback = function(value)
+        settings.AIMBOT_SMOOTHNESS = tonumber(value) or settings.AIMBOT_SMOOTHNESS
+    end,
+})
+
+ui.AimbotWallcheck = CombatTab:Toggle({
+    Title = "Aimbot Wall Check",
+    Value = settings.AIMBOT_WALLCHECK,
+    Callback = function(value)
+        settings.AIMBOT_WALLCHECK = value
+    end,
+})
+
+ui.AimbotTeamcheck = CombatTab:Toggle({
+    Title = "Aimbot Team Check",
+    Value = settings.AIMBOT_TEAMCHECK,
+    Callback = function(value)
+        settings.AIMBOT_TEAMCHECK = value
+    end,
+})
+
+CombatTab:Section({ Title = "Aimlock" })
+
+ui.AimlockEnabled = CombatTab:Toggle({
+    Title = "Enable Aimlock (Hold RMB)",
+    Value = settings.AIMLOCK_ENABLED,
+    Callback = function(value)
+        settings.AIMLOCK_ENABLED = value
+        notify({
+            Title = "Aimlock",
+            Content = value and "Aimlock enabled" or "Aimlock disabled",
+            Duration = 2,
+            Icon = value and "solar:target-bold" or "solar:target-linear",
+        })
+    end,
+})
+
+ui.AimlockFov = CombatTab:Slider({
+    Title = "Aimlock FOV",
+    Desc = "Pixels",
+    Value = { Min = 30, Max = 500, Default = settings.AIMLOCK_FOV },
+    Step = 5,
+    Callback = function(value)
+        settings.AIMLOCK_FOV = tonumber(value) or settings.AIMLOCK_FOV
+    end,
+})
+
+ui.AimlockDistance = CombatTab:Slider({
+    Title = "Aimlock Max Distance",
+    Desc = "Studs",
+    Value = { Min = 50, Max = 3000, Default = settings.AIMLOCK_MAX_DISTANCE },
+    Step = 10,
+    Callback = function(value)
+        settings.AIMLOCK_MAX_DISTANCE = tonumber(value) or settings.AIMLOCK_MAX_DISTANCE
+    end,
+})
+
+ui.AimlockSmooth = CombatTab:Slider({
+    Title = "Aimlock Smoothness",
+    Desc = "0-1",
+    Value = { Min = 0, Max = 1, Default = settings.AIMLOCK_SMOOTHNESS },
+    Step = 0.01,
+    Callback = function(value)
+        settings.AIMLOCK_SMOOTHNESS = tonumber(value) or settings.AIMLOCK_SMOOTHNESS
+    end,
+})
+
+ui.AimlockWallcheck = CombatTab:Toggle({
+    Title = "Aimlock Wall Check",
+    Value = settings.AIMLOCK_WALLCHECK,
+    Callback = function(value)
+        settings.AIMLOCK_WALLCHECK = value
+    end,
+})
+
+ui.AimlockTeamcheck = CombatTab:Toggle({
+    Title = "Aimlock Team Check",
+    Value = settings.AIMLOCK_TEAMCHECK,
+    Callback = function(value)
+        settings.AIMLOCK_TEAMCHECK = value
+    end,
+})
+
+ui.AimlockR6Part = CombatTab:Dropdown({
+    Title = "Aimlock R6 Part",
+    Values = { "Head", "Torso", "HumanoidRootPart", "Left Arm", "Right Arm", "Left Leg", "Right Leg" },
+    Value = settings.AIMLOCK_R6_PART,
+    Callback = function(value)
+        settings.AIMLOCK_R6_PART = value
+    end,
+})
+
+ui.AimlockR15Part = CombatTab:Dropdown({
+    Title = "Aimlock R15 Part",
+    Values = {
+        "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart",
+        "LeftUpperArm", "LeftLowerArm", "LeftHand",
+        "RightUpperArm", "RightLowerArm", "RightHand",
+        "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+        "RightUpperLeg", "RightLowerLeg", "RightFoot"
+    },
+    Value = settings.AIMLOCK_R15_PART,
+    Callback = function(value)
+        settings.AIMLOCK_R15_PART = value
+    end,
+})
+
+ui.AimlockRadiusToggle = CombatTab:Toggle({
+    Title = "Aimlock Radius Visual",
+    Value = settings.AIMLOCK_RADIUS_VISIBLE,
+    Callback = function(value)
+        settings.AIMLOCK_RADIUS_VISIBLE = value
+    end,
+})
+
+ui.AimlockRadiusColor = CombatTab:Colorpicker({
+    Title = "Aimlock Radius Color",
+    Default = settings.AIMLOCK_RADIUS_COLOR,
+    Callback = function(color)
+        settings.AIMLOCK_RADIUS_COLOR = color
+    end,
+})
+
+CombatTab:Section({ Title = "Triggerbot" })
+
+ui.TriggerEnabled = CombatTab:Toggle({
+    Title = "Enable Triggerbot",
+    Value = settings.TRIGGER_ENABLED,
+    Callback = function(value)
+        settings.TRIGGER_ENABLED = value
+        notify({
+            Title = "Triggerbot",
+            Content = value and "Triggerbot enabled" or "Triggerbot disabled",
+            Duration = 2,
+            Icon = value and "solar:flash-bold" or "solar:flash-linear",
+        })
+    end,
+})
+
+ui.TriggerKey = CombatTab:Keybind({
+    Title = "Trigger Toggle Key",
+    Value = settings.TRIGGER_KEY,
+    Callback = function()
+        settings.TRIGGER_ENABLED = not settings.TRIGGER_ENABLED
+        if ui.TriggerEnabled then
+            ui.TriggerEnabled:Set(settings.TRIGGER_ENABLED, false)
+        end
+        notify({
+            Title = "Triggerbot",
+            Content = settings.TRIGGER_ENABLED and "Triggerbot enabled" or "Triggerbot disabled",
+            Duration = 2,
+            Icon = settings.TRIGGER_ENABLED and "solar:flash-bold" or "solar:flash-linear",
+        })
+    end,
+})
+
+ui.TriggerDelay = CombatTab:Slider({
+    Title = "Trigger Delay",
+    Desc = "Seconds",
+    Value = { Min = 0, Max = 0.5, Default = settings.TRIGGER_DELAY },
+    Step = 0.01,
+    Callback = function(value)
+        settings.TRIGGER_DELAY = tonumber(value) or settings.TRIGGER_DELAY
+    end,
+})
+
+ui.TriggerHold = CombatTab:Slider({
+    Title = "Trigger Hold Time",
+    Desc = "Seconds",
+    Value = { Min = 0.01, Max = 0.2, Default = settings.TRIGGER_HOLD_TIME },
+    Step = 0.01,
+    Callback = function(value)
+        settings.TRIGGER_HOLD_TIME = tonumber(value) or settings.TRIGGER_HOLD_TIME
+    end,
+})
+
+ui.TriggerDistance = CombatTab:Slider({
+    Title = "Trigger Max Distance",
+    Desc = "Studs",
+    Value = { Min = 50, Max = 2000, Default = settings.TRIGGER_MAX_DISTANCE },
+    Step = 10,
+    Callback = function(value)
+        settings.TRIGGER_MAX_DISTANCE = tonumber(value) or settings.TRIGGER_MAX_DISTANCE
+    end,
+})
+
+ui.TriggerWallcheck = CombatTab:Toggle({
+    Title = "Trigger Wall Check",
+    Value = settings.TRIGGER_WALLCHECK,
+    Callback = function(value)
+        settings.TRIGGER_WALLCHECK = value
+    end,
+})
+
+ui.TriggerRequireAim = CombatTab:Toggle({
+    Title = "Require Aimlock Hold",
+    Value = settings.TRIGGER_REQUIRE_AIMLOCK,
+    Callback = function(value)
+        settings.TRIGGER_REQUIRE_AIMLOCK = value
+    end,
+})
+
+ui.TriggerUseSilent = CombatTab:Toggle({
+    Title = "Use Silent Aimbot Target",
+    Value = settings.TRIGGER_USE_AIMBOT_TARGET,
+    Callback = function(value)
+        settings.TRIGGER_USE_AIMBOT_TARGET = value
+    end,
+})
+
+local MovementTab = Window:Tab({ Title = "Movement", Icon = "solar:running-linear" })
+MovementTab:Section({ Title = "Anti-Aim" })
+
+ui.AntiAimEnabled = MovementTab:Toggle({
+    Title = "Enable Anti-Aim",
+    Value = settings.ANTI_AIM_ENABLED,
+    Callback = function(value)
+        settings.ANTI_AIM_ENABLED = value
+    end,
+})
+
+ui.AntiAimMode = MovementTab:Dropdown({
+    Title = "Anti-Aim Mode",
+    Values = { "Spin", "Jitter", "Static", "Pitch" },
+    Value = settings.ANTI_AIM_MODE,
+    Callback = function(value)
+        settings.ANTI_AIM_MODE = value
+    end,
+})
+
+ui.AntiAimSpin = MovementTab:Slider({
+    Title = "Spin Speed",
+    Desc = "Degrees/sec",
+    Value = { Min = 0, Max = 720, Default = settings.ANTI_AIM_SPIN_SPEED },
+    Step = 5,
+    Callback = function(value)
+        settings.ANTI_AIM_SPIN_SPEED = tonumber(value) or settings.ANTI_AIM_SPIN_SPEED
+    end,
+})
+
+ui.AntiAimJitter = MovementTab:Slider({
+    Title = "Jitter Range",
+    Desc = "Degrees",
+    Value = { Min = 0, Max = 90, Default = settings.ANTI_AIM_JITTER },
+    Step = 1,
+    Callback = function(value)
+        settings.ANTI_AIM_JITTER = tonumber(value) or settings.ANTI_AIM_JITTER
+    end,
+})
+
+ui.AntiAimOffset = MovementTab:Slider({
+    Title = "Yaw Offset",
+    Desc = "Degrees",
+    Value = { Min = -180, Max = 180, Default = settings.ANTI_AIM_YAW_OFFSET },
+    Step = 1,
+    Callback = function(value)
+        settings.ANTI_AIM_YAW_OFFSET = tonumber(value) or settings.ANTI_AIM_YAW_OFFSET
+    end,
+})
+
+ui.AntiAimPitch = MovementTab:Slider({
+    Title = "Pitch Angle (Pitch mode)",
+    Desc = "Degrees",
+    Value = { Min = -89, Max = 89, Default = settings.ANTI_AIM_PITCH_ANGLE },
+    Step = 1,
+    Callback = function(value)
+        settings.ANTI_AIM_PITCH_ANGLE = tonumber(value) or settings.ANTI_AIM_PITCH_ANGLE
+    end,
+})
+
+ui.AntiAimVisual = MovementTab:Toggle({
+    Title = "Anti-Aim Visual",
+    Value = settings.ANTI_AIM_VISUAL,
+    Callback = function(value)
+        settings.ANTI_AIM_VISUAL = value
+    end,
+})
+
+ui.AntiAimLineColor = MovementTab:Colorpicker({
+    Title = "Anti-Aim Visual Color",
+    Default = settings.ANTI_AIM_LINE_COLOR,
+    Callback = function(color)
+        settings.ANTI_AIM_LINE_COLOR = color
+    end,
+})
+
+MovementTab:Section({ Title = "Strafes" })
+
+ui.StrafeEnabled = MovementTab:Toggle({
+    Title = "Enable Strafes",
+    Value = settings.STRAFE_ENABLED,
+    Callback = function(value)
+        settings.STRAFE_ENABLED = value
+    end,
+})
+
+ui.StrafeBoost = MovementTab:Slider({
+    Title = "Boost Force",
+    Desc = "Studs/sec",
+    Value = { Min = 10, Max = 120, Default = settings.STRAFE_BOOST },
+    Step = 1,
+    Callback = function(value)
+        settings.STRAFE_BOOST = tonumber(value) or settings.STRAFE_BOOST
+    end,
+})
+
+ui.StrafeSmooth = MovementTab:Slider({
+    Title = "Air Control",
+    Desc = "0-2",
+    Value = { Min = 0, Max = 2, Default = settings.STRAFE_SMOOTH },
+    Step = 0.05,
+    Callback = function(value)
+        settings.STRAFE_SMOOTH = tonumber(value) or settings.STRAFE_SMOOTH
+    end,
+})
+
+ui.StrafeMaxDelta = MovementTab:Slider({
+    Title = "Max Velocity Delta",
+    Desc = "Studs/sec",
+    Value = { Min = 10, Max = 150, Default = settings.STRAFE_MAX_DELTA },
+    Step = 1,
+    Callback = function(value)
+        settings.STRAFE_MAX_DELTA = tonumber(value) or settings.STRAFE_MAX_DELTA
+    end,
+})
+
+local VisualsTab = Window:Tab({ Title = "Visuals", Icon = "solar:eye-linear" })
+VisualsTab:Section({ Title = "ESP" })
+
+ui.EspEnabled = VisualsTab:Toggle({
+    Title = "Enable ESP",
+    Value = settings.ESP_ENABLED,
+    Callback = function(value)
+        settings.ESP_ENABLED = value
+    end,
+})
+
+ui.EspBoxes = VisualsTab:Toggle({
+    Title = "Boxes",
+    Value = settings.ESP_BOXES,
+    Callback = function(value)
+        settings.ESP_BOXES = value
+    end,
+})
+
+ui.EspTracers = VisualsTab:Toggle({
+    Title = "Tracers",
+    Value = settings.ESP_TRACERS,
+    Callback = function(value)
+        settings.ESP_TRACERS = value
+    end,
+})
+
+ui.EspNames = VisualsTab:Toggle({
+    Title = "Names",
+    Value = settings.ESP_NAMES,
+    Callback = function(value)
+        settings.ESP_NAMES = value
+    end,
+})
+
+ui.EspOutline = VisualsTab:Toggle({
+    Title = "Outline",
+    Value = settings.ESP_OUTLINE_ENABLED,
+    Callback = function(value)
+        settings.ESP_OUTLINE_ENABLED = value
+    end,
+})
+
+ui.EspOutlineThroughWalls = VisualsTab:Toggle({
+    Title = "Outline Through Walls",
+    Value = settings.ESP_OUTLINE_THROUGH_WALLS,
+    Callback = function(value)
+        settings.ESP_OUTLINE_THROUGH_WALLS = value
+    end,
+})
+
+ui.EspNameMode = VisualsTab:Dropdown({
+    Title = "Name Mode",
+    Values = { "Display", "Username", "Both" },
+    Value = settings.ESP_NAME_MODE,
+    Callback = function(value)
+        settings.ESP_NAME_MODE = value
+    end,
+})
+
+ui.EspMaxDistance = VisualsTab:Slider({
+    Title = "ESP Max Distance",
+    Desc = "Studs",
+    Value = { Min = 100, Max = 5000, Default = settings.ESP_MAX_DISTANCE },
+    Step = 20,
+    Callback = function(value)
+        settings.ESP_MAX_DISTANCE = tonumber(value) or settings.ESP_MAX_DISTANCE
+    end,
+})
+
+ui.EspUpdate = VisualsTab:Slider({
+    Title = "ESP Update Interval",
+    Desc = "Seconds",
+    Value = { Min = 0.05, Max = 2, Default = settings.ESP_UPDATE_INTERVAL },
+    Step = 0.05,
+    Callback = function(value)
+        settings.ESP_UPDATE_INTERVAL = tonumber(value) or settings.ESP_UPDATE_INTERVAL
+    end,
+})
+
+ui.EspThroughWalls = VisualsTab:Toggle({
+    Title = "ESP Through Walls",
+    Value = settings.ESP_THROUGH_WALLS,
+    Callback = function(value)
+        settings.ESP_THROUGH_WALLS = value
+    end,
+})
+
+ui.EspBoxColor = VisualsTab:Colorpicker({
+    Title = "Box Color",
+    Default = settings.ESP_BOX_COLOR,
+    Callback = function(color)
+        settings.ESP_BOX_COLOR = color
+    end,
+})
+
+ui.EspTracerColor = VisualsTab:Colorpicker({
+    Title = "Tracer Color",
+    Default = settings.ESP_TRACER_COLOR,
+    Callback = function(color)
+        settings.ESP_TRACER_COLOR = color
+    end,
+})
+
+ui.EspFriendColor = VisualsTab:Colorpicker({
+    Title = "Friend ESP Color",
+    Default = settings.ESP_FRIEND_COLOR,
+    Callback = function(color)
+        settings.ESP_FRIEND_COLOR = color
+    end,
+})
+
+ui.EspTextColor = VisualsTab:Colorpicker({
+    Title = "Text Color",
+    Default = settings.ESP_TEXT_COLOR,
+    Callback = function(color)
+        settings.ESP_TEXT_COLOR = color
+    end,
+})
+
+ui.EspTextSize = VisualsTab:Slider({
+    Title = "Text Size",
+    Desc = "Pixels",
+    Value = { Min = 10, Max = 24, Default = settings.ESP_TEXT_SIZE },
+    Step = 1,
+    Callback = function(value)
+        settings.ESP_TEXT_SIZE = tonumber(value) or settings.ESP_TEXT_SIZE
+    end,
+})
+
+ui.SpawnTagTextSize = VisualsTab:Slider({
+    Title = "Spawn Tag Size",
+    Desc = "Pixels",
+    Value = { Min = 8, Max = 24, Default = settings.SPAWN_TAG_TEXT_SIZE },
+    Step = 1,
+    Callback = function(value)
+        settings.SPAWN_TAG_TEXT_SIZE = tonumber(value) or settings.SPAWN_TAG_TEXT_SIZE
+    end,
+})
+
+VisualsTab:Section({ Title = "Aimbot Visuals" })
+
+ui.AimbotLineToggle = VisualsTab:Toggle({
+    Title = "Aimbot Line",
+    Value = settings.AIMBOT_LINE_ENABLED,
+    Callback = function(value)
+        settings.AIMBOT_LINE_ENABLED = value
+    end,
+})
+
+ui.AimbotLineColor = VisualsTab:Colorpicker({
+    Title = "Aimbot Line Color",
+    Default = settings.AIMBOT_LINE_COLOR,
+    Callback = function(color)
+        settings.AIMBOT_LINE_COLOR = color
+    end,
+})
+
+ui.AimbotFovCircleToggle = VisualsTab:Toggle({
+    Title = "Aimbot FOV Circle",
+    Value = settings.AIMBOT_FOV_CIRCLE,
+    Callback = function(value)
+        settings.AIMBOT_FOV_CIRCLE = value
+    end,
+})
+
+ui.AimbotFovColor = VisualsTab:Colorpicker({
+    Title = "Aimbot FOV Color",
+    Default = settings.AIMBOT_FOV_COLOR,
+    Callback = function(color)
+        settings.AIMBOT_FOV_COLOR = color
+    end,
+})
+
+VisualsTab:Section({ Title = "Camera" })
+
+ui.CustomFovToggle = VisualsTab:Toggle({
+    Title = "Custom Camera FOV",
+    Value = settings.CUSTOM_FOV_ENABLED,
+    Callback = function(value)
+        settings.CUSTOM_FOV_ENABLED = value
+    end,
+})
+
+ui.CameraFov = VisualsTab:Slider({
+    Title = "Camera FOV",
+    Desc = "Degrees",
+    Value = { Min = 30, Max = 120, Default = settings.CAMERA_FOV },
+    Step = 1,
+    Callback = function(value)
+        settings.CAMERA_FOV = tonumber(value) or settings.CAMERA_FOV
+    end,
+})
+
+ui.ThirdPersonToggle = VisualsTab:Toggle({
+    Title = "Third Person",
+    Value = settings.THIRD_PERSON_ENABLED,
+    Callback = function(value)
+        settings.THIRD_PERSON_ENABLED = value
+    end,
+})
+
+ui.ThirdPersonDistance = VisualsTab:Slider({
+    Title = "Third Person Distance",
+    Desc = "Studs",
+    Value = { Min = 2, Max = 20, Default = settings.THIRD_PERSON_DISTANCE },
+    Step = 0.5,
+    Callback = function(value)
+        settings.THIRD_PERSON_DISTANCE = tonumber(value) or settings.THIRD_PERSON_DISTANCE
+    end,
+})
+
+ui.ThirdPersonTransparency = VisualsTab:Slider({
+    Title = "Third Person Transparency",
+    Desc = "0-1",
+    Value = { Min = 0, Max = 1, Default = settings.THIRD_PERSON_TRANSPARENCY },
+    Step = 0.05,
+    Callback = function(value)
+        settings.THIRD_PERSON_TRANSPARENCY = tonumber(value) or settings.THIRD_PERSON_TRANSPARENCY
+    end,
+})
+
+VisualsTab:Section({ Title = "Kill Silhouette" })
+
+ui.SilhouetteToggle = VisualsTab:Toggle({
+    Title = "Enable Silhouette",
+    Value = settings.KILL_SILHOUETTE_ENABLED,
+    Callback = function(value)
+        settings.KILL_SILHOUETTE_ENABLED = value
+    end,
+})
+
+ui.SilhouetteColor = VisualsTab:Colorpicker({
+    Title = "Silhouette Color",
+    Default = settings.KILL_SILHOUETTE_COLOR,
+    Callback = function(color)
+        settings.KILL_SILHOUETTE_COLOR = color
+    end,
+})
+
+ui.SilhouetteTransparency = VisualsTab:Slider({
+    Title = "Silhouette Transparency",
+    Desc = "0-1",
+    Value = { Min = 0, Max = 1, Default = settings.KILL_SILHOUETTE_TRANSPARENCY },
+    Step = 0.05,
+    Callback = function(value)
+        settings.KILL_SILHOUETTE_TRANSPARENCY = tonumber(value) or settings.KILL_SILHOUETTE_TRANSPARENCY
+    end,
+})
+
+ui.SilhouetteDuration = VisualsTab:Slider({
+    Title = "Silhouette Duration",
+    Desc = "Seconds",
+    Value = { Min = 1, Max = 10, Default = settings.KILL_SILHOUETTE_DURATION },
+    Step = 0.5,
+    Callback = function(value)
+        settings.KILL_SILHOUETTE_DURATION = tonumber(value) or settings.KILL_SILHOUETTE_DURATION
+    end,
+})
+
+local SettingsTab = Window:Tab({ Title = "Settings", Icon = "solar:settings-linear" })
+SettingsTab:Section({ Title = "Overlay" })
+
+SettingsTab:Paragraph({ Title = "Shift + F3: Toggle overlay" })
+
+ui.ToggleOverlaySettings = SettingsTab:Button({
+    Title = "Toggle Stats Window",
+    Callback = function()
+        setOverlayVisible(not overlayVisible)
+        notify({
+            Title = "Overlay",
+            Content = overlayVisible and "Stats window enabled" or "Stats window hidden",
+            Duration = 2,
+            Icon = overlayVisible and "solar:eye-bold" or "solar:eye-closed-bold",
+        })
+    end,
+})
+
+ui.OverlayShowFps = SettingsTab:Toggle({
+    Title = "Show FPS",
+    Value = settings.OVERLAY_SHOW_FPS,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_FPS = value
+    end,
+})
+
+ui.OverlayShowPing = SettingsTab:Toggle({
+    Title = "Show Ping",
+    Value = settings.OVERLAY_SHOW_PING,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_PING = value
+    end,
+})
+
+ui.OverlayShowAimbot = SettingsTab:Toggle({
+    Title = "Show Aimbot State",
+    Value = settings.OVERLAY_SHOW_AIMBOT_STATE,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_AIMBOT_STATE = value
+    end,
+})
+
+ui.OverlayShowTrigger = SettingsTab:Toggle({
+    Title = "Show Trigger State",
+    Value = settings.OVERLAY_SHOW_TRIGGER_STATE,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_TRIGGER_STATE = value
+    end,
+})
+
+ui.OverlayShowFakeLag = SettingsTab:Toggle({
+    Title = "Show Fake Lag State",
+    Value = settings.OVERLAY_SHOW_FAKE_LAG,
+    Callback = function(value)
+        settings.OVERLAY_SHOW_FAKE_LAG = value
+    end,
+})
+
+SettingsTab:Section({ Title = "Config" })
+
+ui.ConfigDropdown = SettingsTab:Dropdown({
+    Title = "Select Config",
+    Values = listConfigs(),
+    Value = configName,
+    Callback = function(value)
+        if value then
+            configName = value
+            if ui.ConfigName and ui.ConfigName.Set then
+                pcall(function()
+                    ui.ConfigName:Set(value)
+                end)
+            end
+        end
+    end,
+})
+
+ui.RefreshConfigs = SettingsTab:Button({
+    Title = "Refresh Config List",
+    Callback = function()
+        local configs = refreshConfigDropdown()
+        notify({
+            Title = "Configs",
+            Content = "Found " .. tostring(#configs) .. " config(s)",
+            Duration = 2,
+            Icon = "solar:refresh-linear",
+        })
+    end,
+})
+
+ui.ConfigName = SettingsTab:Input({
+    Title = "Config Name",
+    Value = configName,
+    Callback = function(value)
+        configName = value
+    end,
+})
+
+ui.SaveConfig = SettingsTab:Button({
+    Title = "Save Config",
+    Callback = function()
+        if ui.TriggerKey and ui.TriggerKey.Value then
+            settings.TRIGGER_KEY = ui.TriggerKey.Value
+        end
+        configName = sanitizeConfigName(configName)
+        if ui.ConfigName and ui.ConfigName.Set then
+            pcall(function()
+                ui.ConfigName:Set(configName)
+            end)
+        end
+        if ui.ConfigDropdown and ui.ConfigDropdown.Select then
+            pcall(function()
+                ui.ConfigDropdown:Select(configName)
+            end)
+        end
+        local ok = saveSettings(configName)
+        refreshConfigDropdown()
+        notify({
+            Title = ok and "Config Saved" or "Save Failed",
+            Content = ok and ("Saved: " .. sanitizeConfigName(configName)) or "File system not available",
+            Duration = 2,
+            Icon = ok and "solar:folder-with-files-linear" or "solar:danger-triangle-linear",
+        })
+    end,
+})
+
+local function syncUI()
+    if ui.ConfigDropdown then ui.ConfigDropdown:Select(configName) end
+    if ui.ConfigName and ui.ConfigName.Set then
+        pcall(function()
+            ui.ConfigName:Set(configName)
+        end)
+    end
+    if ui.FriendMode then ui.FriendMode:Set(settings.FRIEND_MODE_ENABLED, false) end
+    if ui.OverlayShowFpsQuick then ui.OverlayShowFpsQuick:Set(settings.OVERLAY_SHOW_FPS, false) end
+    if ui.OverlayShowPingQuick then ui.OverlayShowPingQuick:Set(settings.OVERLAY_SHOW_PING, false) end
+    if ui.OverlayShowAimbotQuick then ui.OverlayShowAimbotQuick:Set(settings.OVERLAY_SHOW_AIMBOT_STATE, false) end
+    if ui.OverlayShowTriggerQuick then ui.OverlayShowTriggerQuick:Set(settings.OVERLAY_SHOW_TRIGGER_STATE, false) end
+    if ui.OverlayShowFps then ui.OverlayShowFps:Set(settings.OVERLAY_SHOW_FPS, false) end
+    if ui.OverlayShowPing then ui.OverlayShowPing:Set(settings.OVERLAY_SHOW_PING, false) end
+    if ui.OverlayShowAimbot then ui.OverlayShowAimbot:Set(settings.OVERLAY_SHOW_AIMBOT_STATE, false) end
+    if ui.OverlayShowTrigger then ui.OverlayShowTrigger:Set(settings.OVERLAY_SHOW_TRIGGER_STATE, false) end
+    if ui.OverlayShowFakeLagQuick then ui.OverlayShowFakeLagQuick:Set(settings.OVERLAY_SHOW_FAKE_LAG, false) end
+    if ui.OverlayShowFakeLag then ui.OverlayShowFakeLag:Set(settings.OVERLAY_SHOW_FAKE_LAG, false) end
+    if ui.TriggerKey then ui.TriggerKey:Set(settings.TRIGGER_KEY) end
+    if ui.AimbotEnabled then ui.AimbotEnabled:Set(settings.AIMBOT_ENABLED, false) end
+    if ui.AimbotMode then ui.AimbotMode:Select(settings.AIMBOT_MODE) end
+    if ui.AimbotPart then ui.AimbotPart:Select(settings.AIMBOT_PART) end
+    if ui.AimbotFov then ui.AimbotFov:Set(settings.AIMBOT_FOV) end
+    if ui.AimbotDistance then ui.AimbotDistance:Set(settings.AIMBOT_MAX_DISTANCE) end
+    if ui.AimbotSmooth then ui.AimbotSmooth:Set(settings.AIMBOT_SMOOTHNESS) end
+    if ui.AimbotWallcheck then ui.AimbotWallcheck:Set(settings.AIMBOT_WALLCHECK, false) end
+    if ui.AimbotTeamcheck then ui.AimbotTeamcheck:Set(settings.AIMBOT_TEAMCHECK, false) end
+    if ui.AimbotLineToggle then ui.AimbotLineToggle:Set(settings.AIMBOT_LINE_ENABLED, false) end
+    if ui.AimbotLineColor then ui.AimbotLineColor:Update(settings.AIMBOT_LINE_COLOR) end
+    if ui.AimbotFovCircleToggle then ui.AimbotFovCircleToggle:Set(settings.AIMBOT_FOV_CIRCLE, false) end
+    if ui.AimbotFovColor then ui.AimbotFovColor:Update(settings.AIMBOT_FOV_COLOR) end
+
+    if ui.AimlockEnabled then ui.AimlockEnabled:Set(settings.AIMLOCK_ENABLED, false) end
+    if ui.AimlockFov then ui.AimlockFov:Set(settings.AIMLOCK_FOV) end
+    if ui.AimlockDistance then ui.AimlockDistance:Set(settings.AIMLOCK_MAX_DISTANCE) end
+    if ui.AimlockSmooth then ui.AimlockSmooth:Set(settings.AIMLOCK_SMOOTHNESS) end
+    if ui.AimlockWallcheck then ui.AimlockWallcheck:Set(settings.AIMLOCK_WALLCHECK, false) end
+    if ui.AimlockTeamcheck then ui.AimlockTeamcheck:Set(settings.AIMLOCK_TEAMCHECK, false) end
+    if ui.AimlockR6Part then ui.AimlockR6Part:Select(settings.AIMLOCK_R6_PART) end
+    if ui.AimlockR15Part then ui.AimlockR15Part:Select(settings.AIMLOCK_R15_PART) end
+    if ui.AimlockRadiusToggle then ui.AimlockRadiusToggle:Set(settings.AIMLOCK_RADIUS_VISIBLE, false) end
+    if ui.AimlockRadiusColor then ui.AimlockRadiusColor:Update(settings.AIMLOCK_RADIUS_COLOR) end
+
+    if ui.TriggerEnabled then ui.TriggerEnabled:Set(settings.TRIGGER_ENABLED, false) end
+    if ui.TriggerDelay then ui.TriggerDelay:Set(settings.TRIGGER_DELAY) end
+    if ui.TriggerHold then ui.TriggerHold:Set(settings.TRIGGER_HOLD_TIME) end
+    if ui.TriggerDistance then ui.TriggerDistance:Set(settings.TRIGGER_MAX_DISTANCE) end
+    if ui.TriggerWallcheck then ui.TriggerWallcheck:Set(settings.TRIGGER_WALLCHECK, false) end
+    if ui.TriggerRequireAim then ui.TriggerRequireAim:Set(settings.TRIGGER_REQUIRE_AIMLOCK, false) end
+    if ui.TriggerUseSilent then ui.TriggerUseSilent:Set(settings.TRIGGER_USE_AIMBOT_TARGET, false) end
+
+    if ui.AntiAimEnabled then ui.AntiAimEnabled:Set(settings.ANTI_AIM_ENABLED, false) end
+    if ui.AntiAimMode then ui.AntiAimMode:Select(settings.ANTI_AIM_MODE) end
+    if ui.AntiAimSpin then ui.AntiAimSpin:Set(settings.ANTI_AIM_SPIN_SPEED) end
+    if ui.AntiAimJitter then ui.AntiAimJitter:Set(settings.ANTI_AIM_JITTER) end
+    if ui.AntiAimOffset then ui.AntiAimOffset:Set(settings.ANTI_AIM_YAW_OFFSET) end
+    if ui.AntiAimPitch then ui.AntiAimPitch:Set(settings.ANTI_AIM_PITCH_ANGLE) end
+    if ui.AntiAimVisual then ui.AntiAimVisual:Set(settings.ANTI_AIM_VISUAL, false) end
+    if ui.AntiAimLineColor then ui.AntiAimLineColor:Update(settings.ANTI_AIM_LINE_COLOR) end
+
+    if ui.StrafeEnabled then ui.StrafeEnabled:Set(settings.STRAFE_ENABLED, false) end
+    if ui.StrafeBoost then ui.StrafeBoost:Set(settings.STRAFE_BOOST) end
+    if ui.StrafeSmooth then ui.StrafeSmooth:Set(settings.STRAFE_SMOOTH) end
+    if ui.StrafeMaxDelta then ui.StrafeMaxDelta:Set(settings.STRAFE_MAX_DELTA) end
+
+    if ui.EspEnabled then ui.EspEnabled:Set(settings.ESP_ENABLED, false) end
+    if ui.EspBoxes then ui.EspBoxes:Set(settings.ESP_BOXES, false) end
+    if ui.EspTracers then ui.EspTracers:Set(settings.ESP_TRACERS, false) end
+    if ui.EspOutline then ui.EspOutline:Set(settings.ESP_OUTLINE_ENABLED, false) end
+    if ui.EspOutlineThroughWalls then ui.EspOutlineThroughWalls:Set(settings.ESP_OUTLINE_THROUGH_WALLS, false) end
+    if ui.EspNames then ui.EspNames:Set(settings.ESP_NAMES, false) end
+    if ui.EspNameMode then ui.EspNameMode:Select(settings.ESP_NAME_MODE) end
+    if ui.EspMaxDistance then ui.EspMaxDistance:Set(settings.ESP_MAX_DISTANCE) end
+    if ui.EspUpdate then ui.EspUpdate:Set(settings.ESP_UPDATE_INTERVAL) end
+    if ui.EspThroughWalls then ui.EspThroughWalls:Set(settings.ESP_THROUGH_WALLS, false) end
+    if ui.EspBoxColor then ui.EspBoxColor:Update(settings.ESP_BOX_COLOR) end
+    if ui.EspTracerColor then ui.EspTracerColor:Update(settings.ESP_TRACER_COLOR) end
+    if ui.EspFriendColor then ui.EspFriendColor:Update(settings.ESP_FRIEND_COLOR) end
+    if ui.EspTextColor then ui.EspTextColor:Update(settings.ESP_TEXT_COLOR) end
+    if ui.EspTextSize then ui.EspTextSize:Set(settings.ESP_TEXT_SIZE) end
+    if ui.SpawnTagTextSize then ui.SpawnTagTextSize:Set(settings.SPAWN_TAG_TEXT_SIZE) end
+
+    if ui.CustomFovToggle then ui.CustomFovToggle:Set(settings.CUSTOM_FOV_ENABLED, false) end
+    if ui.CameraFov then ui.CameraFov:Set(settings.CAMERA_FOV) end
+    if ui.ThirdPersonToggle then ui.ThirdPersonToggle:Set(settings.THIRD_PERSON_ENABLED, false) end
+    if ui.ThirdPersonDistance then ui.ThirdPersonDistance:Set(settings.THIRD_PERSON_DISTANCE) end
+    if ui.ThirdPersonTransparency then ui.ThirdPersonTransparency:Set(settings.THIRD_PERSON_TRANSPARENCY) end
+
+    if ui.SilhouetteToggle then ui.SilhouetteToggle:Set(settings.KILL_SILHOUETTE_ENABLED, false) end
+    if ui.SilhouetteColor then ui.SilhouetteColor:Update(settings.KILL_SILHOUETTE_COLOR) end
+    if ui.SilhouetteTransparency then ui.SilhouetteTransparency:Set(settings.KILL_SILHOUETTE_TRANSPARENCY) end
+    if ui.SilhouetteDuration then ui.SilhouetteDuration:Set(settings.KILL_SILHOUETTE_DURATION) end
+end
+
+ui.LoadConfig = SettingsTab:Button({
+    Title = "Load Config",
+    Callback = function()
+        configName = sanitizeConfigName(configName)
+        refreshConfigDropdown()
+        local ok = loadSettings(configName)
+        if ok then
+            if ui.ConfigDropdown and ui.ConfigDropdown.Select then
+                pcall(function()
+                    ui.ConfigDropdown:Select(configName)
+                end)
+            end
+            if ui.ConfigName and ui.ConfigName.Set then
+                pcall(function()
+                    ui.ConfigName:Set(configName)
+                end)
+            end
+            if ui.OverlayShowFpsQuick then ui.OverlayShowFpsQuick:Set(settings.OVERLAY_SHOW_FPS, false) end
+            if ui.OverlayShowPingQuick then ui.OverlayShowPingQuick:Set(settings.OVERLAY_SHOW_PING, false) end
+            if ui.OverlayShowAimbotQuick then ui.OverlayShowAimbotQuick:Set(settings.OVERLAY_SHOW_AIMBOT_STATE, false) end
+            if ui.OverlayShowTriggerQuick then ui.OverlayShowTriggerQuick:Set(settings.OVERLAY_SHOW_TRIGGER_STATE, false) end
+            if ui.OverlayShowFakeLagQuick then ui.OverlayShowFakeLagQuick:Set(settings.OVERLAY_SHOW_FAKE_LAG, false) end
+            if ui.FriendMode then ui.FriendMode:Set(settings.FRIEND_MODE_ENABLED, false) end
+            if ui.OverlayShowFps then ui.OverlayShowFps:Set(settings.OVERLAY_SHOW_FPS, false) end
+            if ui.OverlayShowPing then ui.OverlayShowPing:Set(settings.OVERLAY_SHOW_PING, false) end
+            if ui.OverlayShowAimbot then ui.OverlayShowAimbot:Set(settings.OVERLAY_SHOW_AIMBOT_STATE, false) end
+            if ui.OverlayShowTrigger then ui.OverlayShowTrigger:Set(settings.OVERLAY_SHOW_TRIGGER_STATE, false) end
+            if ui.OverlayShowFakeLag then ui.OverlayShowFakeLag:Set(settings.OVERLAY_SHOW_FAKE_LAG, false) end
+            if ui.TriggerKey then ui.TriggerKey:Set(settings.TRIGGER_KEY) end
+            if ui.AimbotEnabled then ui.AimbotEnabled:Set(settings.AIMBOT_ENABLED, false) end
+            if ui.AimbotMode then ui.AimbotMode:Select(settings.AIMBOT_MODE) end
+            if ui.AimbotPart then ui.AimbotPart:Select(settings.AIMBOT_PART) end
+            if ui.AimbotFov then ui.AimbotFov:Set(settings.AIMBOT_FOV) end
+            if ui.AimbotDistance then ui.AimbotDistance:Set(settings.AIMBOT_MAX_DISTANCE) end
+            if ui.AimbotSmooth then ui.AimbotSmooth:Set(settings.AIMBOT_SMOOTHNESS) end
+            if ui.AimbotWallcheck then ui.AimbotWallcheck:Set(settings.AIMBOT_WALLCHECK, false) end
+            if ui.AimbotTeamcheck then ui.AimbotTeamcheck:Set(settings.AIMBOT_TEAMCHECK, false) end
+            if ui.AimbotLineToggle then ui.AimbotLineToggle:Set(settings.AIMBOT_LINE_ENABLED, false) end
+            if ui.AimbotLineColor then ui.AimbotLineColor:Update(settings.AIMBOT_LINE_COLOR) end
+            if ui.AimbotFovCircleToggle then ui.AimbotFovCircleToggle:Set(settings.AIMBOT_FOV_CIRCLE, false) end
+            if ui.AimbotFovColor then ui.AimbotFovColor:Update(settings.AIMBOT_FOV_COLOR) end
+
+            if ui.AimlockEnabled then ui.AimlockEnabled:Set(settings.AIMLOCK_ENABLED, false) end
+            if ui.AimlockFov then ui.AimlockFov:Set(settings.AIMLOCK_FOV) end
+            if ui.AimlockDistance then ui.AimlockDistance:Set(settings.AIMLOCK_MAX_DISTANCE) end
+            if ui.AimlockSmooth then ui.AimlockSmooth:Set(settings.AIMLOCK_SMOOTHNESS) end
+            if ui.AimlockWallcheck then ui.AimlockWallcheck:Set(settings.AIMLOCK_WALLCHECK, false) end
+            if ui.AimlockTeamcheck then ui.AimlockTeamcheck:Set(settings.AIMLOCK_TEAMCHECK, false) end
+            if ui.AimlockR6Part then ui.AimlockR6Part:Select(settings.AIMLOCK_R6_PART) end
+            if ui.AimlockR15Part then ui.AimlockR15Part:Select(settings.AIMLOCK_R15_PART) end
+            if ui.AimlockRadiusToggle then ui.AimlockRadiusToggle:Set(settings.AIMLOCK_RADIUS_VISIBLE, false) end
+            if ui.AimlockRadiusColor then ui.AimlockRadiusColor:Update(settings.AIMLOCK_RADIUS_COLOR) end
+
+            if ui.TriggerEnabled then ui.TriggerEnabled:Set(settings.TRIGGER_ENABLED, false) end
+            if ui.TriggerDelay then ui.TriggerDelay:Set(settings.TRIGGER_DELAY) end
+            if ui.TriggerHold then ui.TriggerHold:Set(settings.TRIGGER_HOLD_TIME) end
+            if ui.TriggerDistance then ui.TriggerDistance:Set(settings.TRIGGER_MAX_DISTANCE) end
+            if ui.TriggerWallcheck then ui.TriggerWallcheck:Set(settings.TRIGGER_WALLCHECK, false) end
+            if ui.TriggerRequireAim then ui.TriggerRequireAim:Set(settings.TRIGGER_REQUIRE_AIMLOCK, false) end
+            if ui.TriggerUseSilent then ui.TriggerUseSilent:Set(settings.TRIGGER_USE_AIMBOT_TARGET, false) end
+
+            if ui.AntiAimEnabled then ui.AntiAimEnabled:Set(settings.ANTI_AIM_ENABLED, false) end
+            if ui.AntiAimMode then ui.AntiAimMode:Select(settings.ANTI_AIM_MODE) end
+            if ui.AntiAimSpin then ui.AntiAimSpin:Set(settings.ANTI_AIM_SPIN_SPEED) end
+            if ui.AntiAimJitter then ui.AntiAimJitter:Set(settings.ANTI_AIM_JITTER) end
+            if ui.AntiAimOffset then ui.AntiAimOffset:Set(settings.ANTI_AIM_YAW_OFFSET) end
+            if ui.AntiAimPitch then ui.AntiAimPitch:Set(settings.ANTI_AIM_PITCH_ANGLE) end
+            if ui.AntiAimVisual then ui.AntiAimVisual:Set(settings.ANTI_AIM_VISUAL, false) end
+            if ui.AntiAimLineColor then ui.AntiAimLineColor:Update(settings.ANTI_AIM_LINE_COLOR) end
+
+            if ui.StrafeEnabled then ui.StrafeEnabled:Set(settings.STRAFE_ENABLED, false) end
+            if ui.StrafeBoost then ui.StrafeBoost:Set(settings.STRAFE_BOOST) end
+            if ui.StrafeSmooth then ui.StrafeSmooth:Set(settings.STRAFE_SMOOTH) end
+            if ui.StrafeMaxDelta then ui.StrafeMaxDelta:Set(settings.STRAFE_MAX_DELTA) end
+
+            if ui.EspEnabled then ui.EspEnabled:Set(settings.ESP_ENABLED, false) end
+            if ui.EspBoxes then ui.EspBoxes:Set(settings.ESP_BOXES, false) end
+            if ui.EspTracers then ui.EspTracers:Set(settings.ESP_TRACERS, false) end
+            if ui.EspOutline then ui.EspOutline:Set(settings.ESP_OUTLINE_ENABLED, false) end
+            if ui.EspOutlineThroughWalls then ui.EspOutlineThroughWalls:Set(settings.ESP_OUTLINE_THROUGH_WALLS, false) end
+            if ui.EspNames then ui.EspNames:Set(settings.ESP_NAMES, false) end
+            if ui.EspNameMode then ui.EspNameMode:Select(settings.ESP_NAME_MODE) end
+            if ui.EspMaxDistance then ui.EspMaxDistance:Set(settings.ESP_MAX_DISTANCE) end
+            if ui.EspUpdate then ui.EspUpdate:Set(settings.ESP_UPDATE_INTERVAL) end
+            if ui.EspThroughWalls then ui.EspThroughWalls:Set(settings.ESP_THROUGH_WALLS, false) end
+            if ui.EspBoxColor then ui.EspBoxColor:Update(settings.ESP_BOX_COLOR) end
+            if ui.EspTracerColor then ui.EspTracerColor:Update(settings.ESP_TRACER_COLOR) end
+            if ui.EspFriendColor then ui.EspFriendColor:Update(settings.ESP_FRIEND_COLOR) end
+            if ui.EspTextColor then ui.EspTextColor:Update(settings.ESP_TEXT_COLOR) end
+            if ui.EspTextSize then ui.EspTextSize:Set(settings.ESP_TEXT_SIZE) end
+            if ui.SpawnTagTextSize then ui.SpawnTagTextSize:Set(settings.SPAWN_TAG_TEXT_SIZE) end
+
+            if ui.CustomFovToggle then ui.CustomFovToggle:Set(settings.CUSTOM_FOV_ENABLED, false) end
+            if ui.CameraFov then ui.CameraFov:Set(settings.CAMERA_FOV) end
+            if ui.ThirdPersonToggle then ui.ThirdPersonToggle:Set(settings.THIRD_PERSON_ENABLED, false) end
+            if ui.ThirdPersonDistance then ui.ThirdPersonDistance:Set(settings.THIRD_PERSON_DISTANCE) end
+            if ui.ThirdPersonTransparency then ui.ThirdPersonTransparency:Set(settings.THIRD_PERSON_TRANSPARENCY) end
+
+            if ui.SilhouetteToggle then ui.SilhouetteToggle:Set(settings.KILL_SILHOUETTE_ENABLED, false) end
+            if ui.SilhouetteColor then ui.SilhouetteColor:Update(settings.KILL_SILHOUETTE_COLOR) end
+            if ui.SilhouetteTransparency then ui.SilhouetteTransparency:Set(settings.KILL_SILHOUETTE_TRANSPARENCY) end
+            if ui.SilhouetteDuration then ui.SilhouetteDuration:Set(settings.KILL_SILHOUETTE_DURATION) end
+        end
+    notify({
+        Title = ok and "Config Loaded" or "Load Failed",
+        Content = ok and ("Loaded: " .. sanitizeConfigName(configName)) or "Config not found",
+        Duration = 2,
+        Icon = ok and "solar:folder-open-linear" or "solar:danger-triangle-linear",
+    })
+    setOverlayVisible(settings.OVERLAY_ENABLED)
+end,
+})
+
+ui.ResetConfig = SettingsTab:Button({
+    Title = "Reset to Defaults",
+    Callback = function()
+        resetSettings()
+        syncUI()
+        setOverlayVisible(settings.OVERLAY_ENABLED)
+        notify({
+            Title = "Defaults",
+            Content = "Settings reset to defaults",
+            Duration = 2,
+            Icon = "solar:refresh-linear",
+        })
+    end,
+})
+
+SettingsTab:Section({ Title = "Unload" })
+
+ui.Unload = SettingsTab:Button({
+    Title = "Unload Script",
+    Callback = function()
+        notify({
+            Title = "Unloading",
+            Content = "Removing RageAimbot...",
+            Duration = 2,
+            Icon = "solar:logout-2-linear",
+        })
+
+        for _, conn in ipairs(connections) do
+            if conn and typeof(conn) == "RBXScriptConnection" then
+                conn:Disconnect()
+            end
+        end
+        connections = {}
+
+        clearEsp()
+        removeDrawings()
+        if overlayGui then
+            overlayGui:Destroy()
+        end
+        for _, obj in ipairs(createdObjects) do
+            if obj and obj.Parent then
+                obj:Destroy()
+            end
+        end
+        createdObjects = {}
+        local humanoid = getHumanoid(localPlayer.Character)
+        if humanoid then
+            humanoid.AutoRotate = true
+        end
+        setCharacterTransparency(defaultLocalTransparency)
+        camera.FieldOfView = defaultFov
+        localPlayer.CameraMode = defaultCameraMode
+        localPlayer.CameraMinZoomDistance = defaultMinZoom
+        localPlayer.CameraMaxZoomDistance = defaultMaxZoom
+        Window:Destroy()
+    end,
+})
+
+notify({
+    Title = "RageAimbot",
+    Content = "Loaded. Hold RMB for Aimlock. Shift+F3 for overlay.",
+    Duration = 3,
+    Icon = "solar:target-bold",
+})
+setOverlayVisible(settings.OVERLAY_ENABLED)
