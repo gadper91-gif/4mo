@@ -85,7 +85,7 @@
 
 	local Window = Library:CreateWindow({
 		Title = "☣️ VaB",
-		Footer = "Made by VaBlox",
+		Footer = "cracked by ggenoc1dwv",
 		NotifySide = "Right",
 		ShowCustomCursor = true,
 	})
