@@ -1,4 +1,4 @@
-	-- Removed access whitelist/kick; script now runs for any user
+
 	local SecretKey = "qwerty1234"
 	local KeyFileName = "vablox_hub.txt" 
 
@@ -85,7 +85,7 @@
 
 	local Window = Library:CreateWindow({
 		Title = "☣️ VaB",
-		Footer = "cracked by ggenoc1dwv",
+		Footer = "copypasted by ggenoc1dwv",
 		NotifySide = "Right",
 		ShowCustomCursor = true,
 	})
