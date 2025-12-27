@@ -79,8 +79,26 @@ local DEFAULT_SETTINGS = {
     MAX_ESP_DISTANCE = 1000,
     ESP_UPDATE_INTERVAL = 1,
     SHOW_DISPLAY_NAME = true,
-    SHOW_USERNAME = true
+    SHOW_USERNAME = true,
+    WATERMARK_POS = {
+        ScaleX = 0,
+        OffsetX = 10,
+        ScaleY = 1,
+        OffsetY = -45
+    }
 }
+
+local function cloneSettingValue(value)
+    if typeof(value) ~= "table" then
+        return value
+    end
+    
+    local copy = {}
+    for key, val in pairs(value) do
+        copy[key] = cloneSettingValue(val)
+    end
+    return copy
+end
 
 local SETTINGS_FILENAME = "aimlock_settings.json"
 local SETTINGS = {}
@@ -109,6 +127,7 @@ local espUpdateInterval = 1
 local lastEspUpdate = 0
 local espObjects = {}
 local nameTags = {}
+local watermarkDragConnections = {}
 
 local espSettings = {
     Color = Color3.fromRGB(255, 255, 255),
@@ -147,6 +166,18 @@ end
 
 function saveSettings()
     local success, result = pcall(function()
+        local wmPos = SETTINGS.WATERMARK_POS or DEFAULT_SETTINGS.WATERMARK_POS
+        if watermark and watermark.Frame then
+            local pos = watermark.Frame.Position
+            wmPos = {
+                ScaleX = pos.X.Scale,
+                OffsetX = pos.X.Offset,
+                ScaleY = pos.Y.Scale,
+                OffsetY = pos.Y.Offset
+            }
+        end
+        SETTINGS.WATERMARK_POS = wmPos
+        
         local saveData = {
             MAX_DISTANCE = SETTINGS.MAX_DISTANCE,
             FOV_ANGLE = SETTINGS.FOV_ANGLE,
@@ -177,6 +208,7 @@ function saveSettings()
             RADIUS_COLOR_R = SETTINGS.RADIUS_COLOR_R,
             RADIUS_COLOR_G = SETTINGS.RADIUS_COLOR_G,
             RADIUS_COLOR_B = SETTINGS.RADIUS_COLOR_B,
+            WATERMARK_POS = wmPos,
             
             ESP_ENABLED = espEnabled,
             ESP_COLOR_R = math.floor(espSettings.Color.R * 255),
@@ -229,9 +261,9 @@ function loadSettings()
         local mergedSettings = {}
         for key, value in pairs(DEFAULT_SETTINGS) do
             if loadedSettings[key] ~= nil then
-                mergedSettings[key] = loadedSettings[key]
+                mergedSettings[key] = cloneSettingValue(loadedSettings[key])
             else
-                mergedSettings[key] = value
+                mergedSettings[key] = cloneSettingValue(value)
             end
         end
         
@@ -324,8 +356,9 @@ if loadedSettings then
         SETTINGS.FOV_ANGLE = SETTINGS.CAMERA_FOV
     end
 else
-    SETTINGS = DEFAULT_SETTINGS
+    SETTINGS = cloneSettingValue(DEFAULT_SETTINGS)
 end
+SETTINGS.WATERMARK_POS = SETTINGS.WATERMARK_POS or cloneSettingValue(DEFAULT_SETTINGS.WATERMARK_POS)
 
 function getPing()
     local function parsePingValue(valueString)
@@ -382,8 +415,89 @@ spawn(function()
     end
 end)
 
+local function clearWatermarkDragConnections()
+    for i, connection in ipairs(watermarkDragConnections) do
+        if connection and connection.Disconnect then
+            connection:Disconnect()
+        end
+        watermarkDragConnections[i] = nil
+    end
+end
+
+local function persistWatermarkPosition(pos)
+    SETTINGS.WATERMARK_POS = {
+        ScaleX = pos.X.Scale,
+        OffsetX = pos.X.Offset,
+        ScaleY = pos.Y.Scale,
+        OffsetY = pos.Y.Offset
+    }
+    saveSettings()
+end
+
+local function getSavedWatermarkPosition()
+    local pos = SETTINGS.WATERMARK_POS or DEFAULT_SETTINGS.WATERMARK_POS
+    if typeof(pos) == "table" then
+        return UDim2.new(pos.ScaleX or 0, pos.OffsetX or 10, pos.ScaleY or 0, pos.OffsetY or -45)
+    end
+    return UDim2.new(0, 10, 1, -45)
+end
+
+local function enableWatermarkDragging(frame)
+    if not frame then
+        return
+    end
+    
+    clearWatermarkDragConnections()
+    frame.Active = true
+    
+    local dragging = false
+    local dragStart
+    local startPos
+    
+    local beginConnection = frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+        end
+    end)
+    
+    local moveConnection = UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+    
+    local endConnection = UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and dragging then
+            dragging = false
+            persistWatermarkPosition(frame.Position)
+        end
+    end)
+    
+    watermarkDragConnections = {beginConnection, moveConnection, endConnection}
+    table.insert(connections, beginConnection)
+    table.insert(connections, moveConnection)
+    table.insert(connections, endConnection)
+end
+
+local function getWatermarkBaseWidth()
+    if watermark and watermark.Label then
+        local bounds = (watermark.Label.TextBounds and watermark.Label.TextBounds.X) or 0
+        return math.max(145, math.floor(bounds + 12))
+    end
+    return 145
+end
+
 function createWatermark()
     if watermark then
+        clearWatermarkDragConnections()
         watermark.Gui:Destroy()
     end
     
@@ -394,35 +508,89 @@ function createWatermark()
     table.insert(createdObjects, screenGui)
     
     local watermarkFrame = Instance.new("Frame")
-    watermarkFrame.Size = UDim2.new(0, 250, 0, 35)
-    watermarkFrame.Position = UDim2.new(0, 10, 1, -45)
-    watermarkFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-    watermarkFrame.BackgroundTransparency = 0.7
+    watermarkFrame.Size = UDim2.new(0, 200, 0, 40)
+    watermarkFrame.AutomaticSize = Enum.AutomaticSize.X
+    watermarkFrame.Position = getSavedWatermarkPosition()
+    watermarkFrame.BackgroundColor3 = Color3.fromRGB(28, 30, 36)
+    watermarkFrame.BackgroundTransparency = 0.2
     watermarkFrame.BorderSizePixel = 0
+    watermarkFrame.ClipsDescendants = true
+    watermarkFrame.ZIndex = 2
     watermarkFrame.Parent = screenGui
     
+    local shadow = Instance.new("ImageLabel")
+    shadow.Name = "Shadow"
+    shadow.AnchorPoint = Vector2.new(0, 0)
+    shadow.Position = UDim2.new(0, -6, 0, -6)
+    shadow.Size = UDim2.new(1, 12, 1, 12)
+    shadow.BackgroundTransparency = 1
+    shadow.Image = "rbxassetid://1316045217"
+    shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+    shadow.ImageTransparency = 0.6
+    shadow.ScaleType = Enum.ScaleType.Slice
+    shadow.SliceCenter = Rect.new(10, 10, 118, 118)
+    shadow.ZIndex = 1
+    shadow.Parent = watermarkFrame
+    
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
+    corner.CornerRadius = UDim.new(0, 10)
     corner.Parent = watermarkFrame
     
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1.2
+    stroke.Transparency = 0.35
+    stroke.Color = Color3.fromRGB(90, 96, 110)
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = watermarkFrame
+    
+    local gradient = Instance.new("UIGradient")
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(38, 42, 52)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(24, 26, 32))
+    })
+    gradient.Rotation = 90
+    gradient.Parent = watermarkFrame
+    
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.BackgroundTransparency = 1
+    content.Size = UDim2.new(1, -24, 1, -16)
+    content.Position = UDim2.new(0, 12, 0, 8)
+    content.AutomaticSize = Enum.AutomaticSize.X
+    content.ZIndex = 3
+    content.Parent = watermarkFrame
+    
+    local contentLayout = Instance.new("UIListLayout")
+    contentLayout.FillDirection = Enum.FillDirection.Horizontal
+    contentLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    contentLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    contentLayout.Padding = UDim.new(0, 10)
+    contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    contentLayout.Parent = content
+    
     local watermarkLabel = Instance.new("TextLabel")
-    watermarkLabel.Size = UDim2.new(0, 140, 1, 0)
-    watermarkLabel.Position = UDim2.new(0, 5, 0, 0)
+    watermarkLabel.AutomaticSize = Enum.AutomaticSize.X
+    watermarkLabel.Size = UDim2.new(0, 0, 1, 0)
     watermarkLabel.BackgroundTransparency = 1
     watermarkLabel.TextColor3 = Color3.new(1, 1, 1)
-    watermarkLabel.Text = "Aimlock by slrNova"
+    watermarkLabel.Text = "aimlock by ggenoc1dwv"
     watermarkLabel.Font = Enum.Font.GothamBold
     watermarkLabel.TextSize = 14
     watermarkLabel.TextXAlignment = Enum.TextXAlignment.Left
     watermarkLabel.TextYAlignment = Enum.TextYAlignment.Center
-    watermarkLabel.Parent = watermarkFrame
+    watermarkLabel.LayoutOrder = 0
+    watermarkLabel.Parent = content
+    watermarkLabel.ZIndex = 3
     
     watermark = {
         Gui = screenGui,
         Frame = watermarkFrame,
-        Label = watermarkLabel
+        Label = watermarkLabel,
+        Content = content,
+        ContentLayout = contentLayout
     }
     
+    enableWatermarkDragging(watermarkFrame)
     updateWatermarkVisibility()
     return watermark
 end
@@ -430,109 +598,67 @@ end
 function updateWatermarkVisibility()
     if not watermark then return end
     
-    local currentX = 145
-    
-    for _, child in ipairs(watermark.Frame:GetChildren()) do
-        if child.Name == "Separator" or child.Name == "PingLabel" or child.Name == "FPSLabel" then
+    local content = watermark.Content or watermark.Frame
+    for _, child in ipairs(content:GetChildren()) do
+        if child ~= watermark.Label and not child:IsA("UIListLayout") then
             child:Destroy()
         end
     end
+
+    watermark.Label.LayoutOrder = 0
+    local layoutOrder = 1
     
-    if SETTINGS.SHOW_PING then
-        local separator = Instance.new("TextLabel")
-        separator.Name = "Separator"
-        separator.Size = UDim2.new(0, 20, 1, 0)
-        separator.Position = UDim2.new(0, currentX, 0, 0)
-        separator.BackgroundTransparency = 1
-        separator.TextColor3 = Color3.new(0.8, 0.8, 0.8)
-        separator.Text = "|"
-        separator.Font = Enum.Font.GothamBold
-        separator.TextSize = 14
-        separator.TextXAlignment = Enum.TextXAlignment.Center
-        separator.TextYAlignment = Enum.TextYAlignment.Center
-        separator.Parent = watermark.Frame
-        
-        currentX = currentX + 20
-        
-        local pingLabel = Instance.new("TextLabel")
-        pingLabel.Name = "PingLabel"
-        pingLabel.Size = UDim2.new(0, 80, 1, 0)
-        pingLabel.Position = UDim2.new(0, currentX, 0, 0)
-        pingLabel.BackgroundTransparency = 1
-        pingLabel.TextColor3 = Color3.new(1, 1, 1)
-        pingLabel.Text = "Ping: 0ms"
-        pingLabel.Font = Enum.Font.GothamBold
-        pingLabel.TextSize = 14
-        pingLabel.TextXAlignment = Enum.TextXAlignment.Left
-        pingLabel.TextYAlignment = Enum.TextYAlignment.Center
-        pingLabel.Parent = watermark.Frame
-        
-        currentX = currentX + 80
-        
-        if SETTINGS.SHOW_FPS then
-            local separator2 = Instance.new("TextLabel")
-            separator2.Name = "Separator2"
-            separator2.Size = UDim2.new(0, 20, 1, 0)
-            separator2.Position = UDim2.new(0, currentX, 0, 0)
-            separator2.BackgroundTransparency = 1
-            separator2.TextColor3 = Color3.new(0.8, 0.8, 0.8)
-            separator2.Text = "|"
-            separator2.Font = Enum.Font.GothamBold
-            separator2.TextSize = 14
-            separator2.TextXAlignment = Enum.TextXAlignment.Center
-            separator2.TextYAlignment = Enum.TextYAlignment.Center
-            separator2.Parent = watermark.Frame
-            
-            currentX = currentX + 20
-            
-            local fpsLabel = Instance.new("TextLabel")
-            fpsLabel.Name = "FPSLabel"
-            fpsLabel.Size = UDim2.new(0, 80, 1, 0)
-            fpsLabel.Position = UDim2.new(0, currentX, 0, 0)
-            fpsLabel.BackgroundTransparency = 1
-            fpsLabel.TextColor3 = Color3.new(1, 1, 1)
-            fpsLabel.Text = "FPS: 0"
-            fpsLabel.Font = Enum.Font.GothamBold
-            fpsLabel.TextSize = 14
-            fpsLabel.TextXAlignment = Enum.TextXAlignment.Left
-            fpsLabel.TextYAlignment = Enum.TextYAlignment.Center
-            fpsLabel.Parent = watermark.Frame
-            
-            currentX = currentX + 80
-        end
-    elseif SETTINGS.SHOW_FPS then
-        local separator = Instance.new("TextLabel")
-        separator.Name = "Separator"
-        separator.Size = UDim2.new(0, 20, 1, 0)
-        separator.Position = UDim2.new(0, currentX, 0, 0)
-        separator.BackgroundTransparency = 1
-        separator.TextColor3 = Color3.new(0.8, 0.8, 0.8)
-        separator.Text = "|"
-        separator.Font = Enum.Font.GothamBold
-        separator.TextSize = 14
-        separator.TextXAlignment = Enum.TextXAlignment.Center
-        separator.TextYAlignment = Enum.TextYAlignment.Center
-        separator.Parent = watermark.Frame
-        
-        currentX = currentX + 20
-        
-        local fpsLabel = Instance.new("TextLabel")
-        fpsLabel.Name = "FPSLabel"
-        fpsLabel.Size = UDim2.new(0, 80, 1, 0)
-        fpsLabel.Position = UDim2.new(0, currentX, 0, 0)
-        fpsLabel.BackgroundTransparency = 1
-        fpsLabel.TextColor3 = Color3.new(1, 1, 1)
-        fpsLabel.Text = "FPS: 0"
-        fpsLabel.Font = Enum.Font.GothamBold
-        fpsLabel.TextSize = 14
-        fpsLabel.TextXAlignment = Enum.TextXAlignment.Left
-        fpsLabel.TextYAlignment = Enum.TextYAlignment.Center
-        fpsLabel.Parent = watermark.Frame
-        
-        currentX = currentX + 80
+    local function addSeparator()
+        local separator = Instance.new("Frame")
+        separator.Name = "StatSeparator"
+        separator.BackgroundColor3 = Color3.fromRGB(100, 104, 112)
+        separator.BackgroundTransparency = 0.25
+        separator.BorderSizePixel = 0
+        separator.Size = UDim2.new(0, 1, 0, 14)
+        separator.LayoutOrder = layoutOrder
+        layoutOrder = layoutOrder + 1
+        separator.ZIndex = 3
+        separator.Parent = content
+        return separator
     end
     
-    watermark.Frame.Size = UDim2.new(0, currentX - 5, 0, 35)
+    local function addStatLabel(name, text)
+        local label = Instance.new("TextLabel")
+        label.Name = name
+        label.AutomaticSize = Enum.AutomaticSize.X
+        label.Size = UDim2.new(0, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.new(1, 1, 1)
+        label.Text = text
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 14
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextYAlignment = Enum.TextYAlignment.Center
+        label.LayoutOrder = layoutOrder
+        layoutOrder = layoutOrder + 1
+        label.ZIndex = 3
+        label.Parent = content
+        return label
+    end
+    
+    if SETTINGS.SHOW_PING then
+        addSeparator()
+        addStatLabel("PingLabel", "Ping: 0ms")
+        if SETTINGS.SHOW_FPS then
+            addSeparator()
+            addStatLabel("FPSLabel", "FPS: 0")
+        end
+    elseif SETTINGS.SHOW_FPS then
+        addSeparator()
+        addStatLabel("FPSLabel", "FPS: 0")
+    end
+    
+    task.defer(function()
+        if watermark and watermark.ContentLayout then
+            local width = watermark.ContentLayout.AbsoluteContentSize.X + 24
+            watermark.Frame.Size = UDim2.new(0, math.max(180, width), 0, 40)
+        end
+    end)
 end
 
 function updateWatermarkColor()
@@ -550,6 +676,7 @@ end
 
 function removeWatermark()
     if watermark then
+        clearWatermarkDragConnections()
         watermark.Gui:Destroy()
         watermark = nil
     end
@@ -1233,8 +1360,8 @@ function startVisualsUpdateLoop()
 end
 
 local Window = WindUI:CreateWindow({
-    Title = "aimlock interface",
-    Author = "slrNova",
+    Title = "Aimlock interface",
+    Author = "by genocid / ggenoc1dwv",
     Icon = "solar:target-linear",
     IconThemed = true,
     Folder = "Aimlock",
@@ -1829,7 +1956,7 @@ SettingsTab:Section({Title = "Management"})
 SettingsTab:Button({
     Title = "Reset to Defaults",
     Callback = function()
-        SETTINGS = DEFAULT_SETTINGS
+        SETTINGS = cloneSettingValue(DEFAULT_SETTINGS)
         camera.FieldOfView = SETTINGS.CAMERA_FOV
         SETTINGS.FOV_ANGLE = SETTINGS.CAMERA_FOV
         
@@ -2048,15 +2175,15 @@ local fpsLabel = InfoTab:Paragraph({Title = "FPS: 0"})
 local antiLagStatus = InfoTab:Paragraph({Title = "Anti Lag: OFF"})
 local loopResetStatus = InfoTab:Paragraph({Title = "Loop Reset: OFF"})
 
-InfoTab:Section({Title = "The Solar Triad | slr"})
+InfoTab:Section({Title = "by genocid / ggenoc1dwv"})
 
 InfoTab:Paragraph({
-    Title = "leilahimikat krutoi",
+    Title = "storm vision loaded",
     Color = Color3.fromRGB(40, 40, 40)
 })
 
 InfoTab:Paragraph({
-    Title = "zig_pdd fascist",
+    Title = "hold steady and lock on",
     Color = Color3.fromRGB(40, 40, 40)
 })
 local infoConnection
@@ -2076,7 +2203,7 @@ infoConnection = RunService.Heartbeat:Connect(function()
     loopResetStatus:SetTitle("Loop Reset: " .. (respawnToggle and "ON" or "OFF"))
     
     if watermark and watermark.Frame then
-        local pingLabelWidget = watermark.Frame:FindFirstChild("PingLabel")
+        local pingLabelWidget = watermark.Frame:FindFirstChild("PingLabel", true)
         if pingLabelWidget then
             if ping <= 135 then
                 pingLabelWidget.TextColor3 = Color3.fromRGB(0, 255, 0)
@@ -2088,7 +2215,7 @@ infoConnection = RunService.Heartbeat:Connect(function()
             pingLabelWidget.Text = "Ping: " .. ping .. "ms"
         end
         
-        local fpsLabelWidget = watermark.Frame:FindFirstChild("FPSLabel")
+        local fpsLabelWidget = watermark.Frame:FindFirstChild("FPSLabel", true)
         if fpsLabelWidget then
             if fps > 60 then
                 fpsLabelWidget.TextColor3 = Color3.fromRGB(0, 255, 0)
